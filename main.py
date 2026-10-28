@@ -37,13 +37,16 @@ current_system_prompt = personas_data["personas"].get(
     current_persona_key, {}
 ).get("prompt", "你是一个友好的AI。")
 
-# 初始化 Gemini 客户端 (通过 Google 官方提供的 OpenAI 兼容接口)
+# 初始化大模型客户端 (支持 Google 官方 OpenAI 接口，或 Antigravity 本地代理转接)
 proxy_url = config.get("proxy_url")
 http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
 
+base_url = config.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/"
+api_key = config.get("gemini_api_key") or "dummy-key"
+
 client = AsyncOpenAI(
-    api_key=config.get("gemini_api_key"),
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    api_key=api_key,
+    base_url=base_url,
     http_client=http_client,
 )
 
