@@ -111,7 +111,7 @@ def handle_commands(session_id: str, text: str) -> str | None:
 
     if cmd in ["/reset", "重置记忆", "清空上下文"]:
         sessions[session_id] = []
-        return "✨ 喵~ 之前的记忆已经被小猫咪用肉垫按掉啦，我们重新开始吧！"
+        return "✨ 历史记忆已全部清空，咱们重新开始！"
 
     if cmd.startswith("/persona"):
         parts = cmd.split()
@@ -122,7 +122,7 @@ def handle_commands(session_id: str, text: str) -> str | None:
             ]
             sessions[session_id] = []  # 切换人设顺便重置会话
             p_name = personas_data["personas"][current_persona_key]["name"]
-            return f"🎭 人设已成功切换为：【{p_name}】喵~！"
+            return f"🎭 人设已成功切换为：【{p_name}】！"
         else:
             cur_name = personas_data["personas"].get(current_persona_key, {}).get("name", "默认")
             lines = [f"当前人设：【{cur_name}】", "可用人设列表："]
