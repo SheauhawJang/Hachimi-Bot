@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Sensitive local config (Contains Gemini API Key)
+config.json
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Virtual Environment
+.venv/
+env/
+venv/
