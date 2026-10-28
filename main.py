@@ -4,6 +4,15 @@ import os
 import sys
 import httpx
 
+# 适配 Windows 控制台输出 UTF-8 / Emoji
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+
 try:
     from websockets.asyncio.server import serve
 except ImportError:

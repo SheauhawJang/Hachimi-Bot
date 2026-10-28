@@ -6,8 +6,18 @@
 import asyncio
 import json
 import os
+import sys
 import httpx
 from openai import AsyncOpenAI
+
+# 适配 Windows 控制台输出 UTF-8 / Emoji
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
