@@ -9,6 +9,7 @@ import os
 import sys
 import httpx
 from openai import AsyncOpenAI
+from face_converter import format_bot_reply
 
 # 适配 Windows 控制台输出 UTF-8 / Emoji
 if sys.platform == "win32":
@@ -75,8 +76,9 @@ async def main():
             temperature=0.8,
         )
         reply = response.choices[0].message.content.strip()
+        formatted_reply = format_bot_reply(reply)
         print("🐱 [哈基米回复]:\n")
-        print(reply)
+        print(formatted_reply)
         print("\n" + "=" * 50)
         print("🎉 测试成功！Gemini API 与人设配置完全正常！")
         print("=" * 50)

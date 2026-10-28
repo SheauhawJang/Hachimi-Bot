@@ -12,13 +12,13 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-
 try:
     from websockets.asyncio.server import serve
 except ImportError:
     from websockets.server import serve
 
 from openai import AsyncOpenAI
+from face_converter import format_bot_reply
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
@@ -35,7 +35,7 @@ with open(PERSONAS_FILE, "r", encoding="utf-8") as f:
 current_persona_key = config.get("default_persona", "hajimi")
 current_system_prompt = personas_data["personas"].get(
     current_persona_key, {}
-).get("prompt", "你是一个友好的AI小猫咪。")
+).get("prompt", "你是一个友好的AI。")
 
 # 初始化 Gemini 客户端 (通过 Google 官方提供的 OpenAI 兼容接口)
 proxy_url = config.get("proxy_url")
@@ -57,33 +57,35 @@ def get_session_history(session_id: str):
     return sessions[session_id]
 
 
-async def chat_with_gemini(session_id: str, user_text: str) -> str:
+async def chat_with_gemini(session_id: str, prompt_text: str, raw_user_msg: str) -> str:
     global current_system_prompt
     history = get_session_history(session_id)
 
     # 组装消息列表
     messages = [{"role": "system", "content": current_system_prompt}]
     messages.extend(history)
-    messages.append({"role": "user", "content": user_text})
+    messages.append({"role": "user", "content": prompt_text})
 
     try:
         response = await client.chat.completions.create(
             model=config.get("gemini_model", "gemini-1.5-pro"),
             messages=messages,
-            temperature=0.75,
+            temperature=0.8,
         )
-        reply = response.choices[0].message.content.strip()
+        raw_reply = response.choices[0].message.content.strip()
 
-        # 记录到历史
-        history.append({"role": "user", "content": user_text})
-        history.append({"role": "assistant", "content": reply})
+        # 记录到历史（历史中保存纯净的问答）
+        history.append({"role": "user", "content": prompt_text})
+        history.append({"role": "assistant", "content": raw_reply})
 
         max_turns = config.get("max_history_turns", 10)
         if len(history) > max_turns * 2:
             history = history[-max_turns * 2 :]
             sessions[session_id] = history
 
-        return reply
+        # 经过表情与思维链清洗管道处理为最终 QQ 发送格式
+        final_reply = format_bot_reply(raw_reply)
+        return final_reply
     except Exception as e:
         err_msg = str(e)
         print(f"❌ [Gemini API 错误]: {err_msg}")
@@ -144,8 +146,12 @@ async def ws_handler(websocket):
 
             msg_type = data.get("message_type")  # "private" 或 "group"
             raw_text = data.get("raw_message", "").strip()
+            sender_info = data.get("sender", {})
             sender_id = str(data.get("user_id"))
             group_id = str(data.get("group_id", ""))
+
+            # 提取发送者昵称（群名片优先）
+            sender_name = sender_info.get("card") or sender_info.get("nickname") or f"用户_{sender_id}"
 
             should_reply = False
             user_msg = raw_text
@@ -153,6 +159,7 @@ async def ws_handler(websocket):
             if msg_type == "private":
                 session_id = f"private_{sender_id}"
                 should_reply = True
+                prompt_text = user_msg
             elif msg_type == "group":
                 self_id = str(data.get("self_id"))
                 at_me = f"[CQ:at,qq={self_id}]"
@@ -160,11 +167,13 @@ async def ws_handler(websocket):
                     should_reply = True
                     user_msg = raw_text.replace(at_me, "").strip()
                 session_id = f"group_{group_id}"
+                # 群聊注入发信人昵称，赋予哈基米真正的认人与称呼能力
+                prompt_text = f"【群友 {sender_name}】: {user_msg}"
 
             if not should_reply or not user_msg:
                 continue
 
-            print(f"📩 [{msg_type}] 来自 {sender_id}: {user_msg}")
+            print(f"📩 [{msg_type}] 来自 {sender_name}({sender_id}): {user_msg}")
 
             # 1. 检查指令
             cmd_reply = handle_commands(session_id, user_msg)
@@ -172,7 +181,7 @@ async def ws_handler(websocket):
                 reply_text = cmd_reply
             else:
                 # 2. 调用大模型
-                reply_text = await chat_with_gemini(session_id, user_msg)
+                reply_text = await chat_with_gemini(session_id, prompt_text, user_msg)
 
             print(f"📤 回复: {reply_text[:60]}...")
 
@@ -201,6 +210,7 @@ async def main():
     print(f"🧠 当前模型: {config.get('gemini_model')}")
     print(f"🎭 默认人设: 【{cur_p_name}】 ({current_persona_key})")
     print(f"⚡ 代理设置: {proxy_url if proxy_url else '直连 (无代理)'}")
+    print(f"✨ 核心框架特性：326种真QQ表情转换 + 群友昵称感知注入 + 短句节奏控制")
     print("=" * 55)
     async with serve(ws_handler, "127.0.0.1", port):
         await asyncio.Future()
