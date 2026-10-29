@@ -24,13 +24,17 @@ async def chat_via_antigravity(
         f"【角色设定】\n{system_prompt}\n",
     ]
     if history:
-        prompt_parts.append("【近期对话历史】")
-        for turn in history[-6:]:
-            role = "群友" if turn.get("role") == "user" else "哈基米"
-            prompt_parts.append(f"{role}: {turn.get('content')}")
+        prompt_parts.append("【本群近期上下文记忆】")
+        for turn in history:
+            role = turn.get("role")
+            content = turn.get("content", "")
+            if role == "user":
+                prompt_parts.append(content)
+            else:
+                prompt_parts.append(f"哈基米: {content}")
         prompt_parts.append("")
 
-    prompt_parts.append(f"【当前群友消息】\n{user_msg}\n")
+    prompt_parts.append(f"【最新消息】\n{user_msg}\n")
     prompt_parts.append("请保持哈基米设定直接回复，无需输出多余客套：")
 
     full_prompt = "\n".join(prompt_parts)

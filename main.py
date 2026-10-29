@@ -20,6 +20,7 @@ except ImportError:
 from openai import AsyncOpenAI
 from face_converter import format_bot_reply
 from antigravity_bridge import chat_via_antigravity
+from session_manager import SessionManager
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
@@ -40,6 +41,10 @@ current_system_prompt = personas_data["personas"].get(
 
 backend = config.get("backend", "antigravity")
 
+# 初始化多群独立持久化会话管理器
+max_turns = config.get("max_history_turns", 10)
+session_mgr = SessionManager(max_history_turns=max_turns)
+
 # 备用 OpenAI 客户端 (当 backend == "api" 时启用)
 proxy_url = config.get("proxy_url")
 http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
@@ -52,19 +57,10 @@ client = AsyncOpenAI(
     http_client=http_client,
 )
 
-# 内存会话管理: session_id -> list of messages
-sessions = {}
-
-
-def get_session_history(session_id: str):
-    if session_id not in sessions:
-        sessions[session_id] = []
-    return sessions[session_id]
-
 
 async def chat_with_llm(session_id: str, prompt_text: str, raw_user_msg: str) -> str:
     global current_system_prompt
-    history = get_session_history(session_id)
+    history = session_mgr.get_history(session_id)
     model = config.get("gemini_model", "flash")
 
     try:
@@ -89,14 +85,8 @@ async def chat_with_llm(session_id: str, prompt_text: str, raw_user_msg: str) ->
             )
             raw_reply = response.choices[0].message.content.strip()
 
-        # 记录到历史
-        history.append({"role": "user", "content": prompt_text})
-        history.append({"role": "assistant", "content": raw_reply})
-
-        max_turns = config.get("max_history_turns", 10)
-        if len(history) > max_turns * 2:
-            history = history[-max_turns * 2 :]
-            sessions[session_id] = history
+        # 记录到当前群/用户的持久化独立记忆中
+        session_mgr.add_interaction(session_id, prompt_text, raw_reply)
 
         # 经过表情与思维链清洗管道处理为最终 QQ 发送格式
         final_reply = format_bot_reply(raw_reply)
@@ -120,15 +110,15 @@ def handle_commands(session_id: str, text: str) -> str | None:
             f"运行后端：{mode_str}\n"
             f"---------------------------\n"
             f"💬 直接发消息或 @我 即可对话\n"
-            f"🔄 /reset ：清空当前会话记忆\n"
+            f"🔄 /reset ：清空本群当前的上下文记忆\n"
             f"🎭 /persona ：查看所有可用人设\n"
             f"🎭 /persona [名称] ：切换人设（如 /persona hajimi）\n"
             f"---------------------------"
         )
 
     if cmd in ["/reset", "重置记忆", "清空上下文"]:
-        sessions[session_id] = []
-        return "✨ 历史记忆已全部清空，咱们重新开始！"
+        session_mgr.reset_session(session_id)
+        return "✨ 本群的历史记忆已全部清空，咱们重新开始吧！"
 
     if cmd.startswith("/persona"):
         parts = cmd.split()
@@ -137,7 +127,7 @@ def handle_commands(session_id: str, text: str) -> str | None:
             current_system_prompt = personas_data["personas"][current_persona_key][
                 "prompt"
             ]
-            sessions[session_id] = []  # 切换人设顺便重置会话
+            session_mgr.reset_session(session_id)  # 切换人设顺便重置本群会话
             p_name = personas_data["personas"][current_persona_key]["name"]
             return f"🎭 人设已成功切换为：【{p_name}】！"
         else:
@@ -226,6 +216,7 @@ async def main():
     print(f"🚀 运行后端模式: 【{mode_str}】")
     print(f"🧠 模型档位: {config.get('gemini_model', 'flash')}")
     print(f"🎭 默认人设: 【{cur_p_name}】 ({current_persona_key})")
+    print(f"💾 会话记忆模式: 【单群独立隔离 + 本地自动持久化 (最近{max_turns}轮)】")
     print(f"✨ 核心特性: 326种真QQ表情转换 + 群友昵称感知注入 + 短句节奏控制")
     print("=" * 65)
     async with serve(ws_handler, "127.0.0.1", port):

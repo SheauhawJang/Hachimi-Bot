@@ -15,3 +15,7 @@ config.json
 .venv/
 env/
 venv/
+
+# Session Data & Chat History
+data/
+
