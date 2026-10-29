@@ -19,6 +19,7 @@ except ImportError:
 
 from openai import AsyncOpenAI
 from face_converter import format_bot_reply
+from antigravity_bridge import chat_via_antigravity
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
@@ -37,10 +38,11 @@ current_system_prompt = personas_data["personas"].get(
     current_persona_key, {}
 ).get("prompt", "你是一个友好的AI。")
 
-# 初始化大模型客户端 (支持 Google 官方 OpenAI 接口，或 Antigravity 本地代理转接)
+backend = config.get("backend", "antigravity")
+
+# 备用 OpenAI 客户端 (当 backend == "api" 时启用)
 proxy_url = config.get("proxy_url")
 http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
-
 base_url = config.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/"
 api_key = config.get("gemini_api_key") or "dummy-key"
 
@@ -60,24 +62,34 @@ def get_session_history(session_id: str):
     return sessions[session_id]
 
 
-async def chat_with_gemini(session_id: str, prompt_text: str, raw_user_msg: str) -> str:
+async def chat_with_llm(session_id: str, prompt_text: str, raw_user_msg: str) -> str:
     global current_system_prompt
     history = get_session_history(session_id)
-
-    # 组装消息列表
-    messages = [{"role": "system", "content": current_system_prompt}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": prompt_text})
+    model = config.get("gemini_model", "flash")
 
     try:
-        response = await client.chat.completions.create(
-            model=config.get("gemini_model", "gemini-1.5-pro"),
-            messages=messages,
-            temperature=0.8,
-        )
-        raw_reply = response.choices[0].message.content.strip()
+        if backend == "antigravity":
+            # 走本地 Antigravity 会员直通车
+            raw_reply = await chat_via_antigravity(
+                system_prompt=current_system_prompt,
+                history=history,
+                user_msg=prompt_text,
+                model=model,
+            )
+        else:
+            # 走外部 API
+            messages = [{"role": "system", "content": current_system_prompt}]
+            messages.extend(history)
+            messages.append({"role": "user", "content": prompt_text})
 
-        # 记录到历史（历史中保存纯净的问答）
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.8,
+            )
+            raw_reply = response.choices[0].message.content.strip()
+
+        # 记录到历史
         history.append({"role": "user", "content": prompt_text})
         history.append({"role": "assistant", "content": raw_reply})
 
@@ -91,9 +103,7 @@ async def chat_with_gemini(session_id: str, prompt_text: str, raw_user_msg: str)
         return final_reply
     except Exception as e:
         err_msg = str(e)
-        print(f"❌ [Gemini API 错误]: {err_msg}")
-        if "401" in err_msg or "API_KEY_INVALID" in err_msg:
-            return "【配置提示】：Gemini API Key 无效或未填写，请在 config.json 中配置有效的 API Key！"
+        print(f"❌ [模型调用错误]: {err_msg}")
         return f"【对话出错】：{err_msg}"
 
 
@@ -103,9 +113,11 @@ def handle_commands(session_id: str, text: str) -> str | None:
 
     if cmd in ["/help", "帮助", "菜单"]:
         cur_name = personas_data["personas"].get(current_persona_key, {}).get("name", current_persona_key)
+        mode_str = "Antigravity Pro 会员通道 (0额度限制)" if backend == "antigravity" else "外部 API 通道"
         return (
             f"🐾 【QQ 哈基米 & 麻将助手】\n"
             f"当前人设：{cur_name}\n"
+            f"运行后端：{mode_str}\n"
             f"---------------------------\n"
             f"💬 直接发消息或 @我 即可对话\n"
             f"🔄 /reset ：清空当前会话记忆\n"
@@ -183,8 +195,8 @@ async def ws_handler(websocket):
             if cmd_reply:
                 reply_text = cmd_reply
             else:
-                # 2. 调用大模型
-                reply_text = await chat_with_gemini(session_id, prompt_text, user_msg)
+                # 2. 调用模型 (走 Antigravity 会员或 API)
+                reply_text = await chat_with_llm(session_id, prompt_text, user_msg)
 
             print(f"📤 回复: {reply_text[:60]}...")
 
@@ -207,14 +219,15 @@ async def ws_handler(websocket):
 async def main():
     port = config.get("bot_ws_port", 8080)
     cur_p_name = personas_data["personas"].get(current_persona_key, {}).get("name", current_persona_key)
-    print("=" * 55)
+    mode_str = "Antigravity Pro 会员通道 (直调本地客户端，0额外扣费，无RPD限制)" if backend == "antigravity" else "外部 API 通道"
+    print("=" * 65)
     print("🐾 QQ Gemini (哈基米) 机器人服务已就绪")
     print(f"🌐 正在监听反向 WebSocket 端口: ws://127.0.0.1:{port}")
-    print(f"🧠 当前模型: {config.get('gemini_model')}")
+    print(f"🚀 运行后端模式: 【{mode_str}】")
+    print(f"🧠 模型档位: {config.get('gemini_model', 'flash')}")
     print(f"🎭 默认人设: 【{cur_p_name}】 ({current_persona_key})")
-    print(f"⚡ 代理设置: {proxy_url if proxy_url else '直连 (无代理)'}")
-    print(f"✨ 核心框架特性：326种真QQ表情转换 + 群友昵称感知注入 + 短句节奏控制")
-    print("=" * 55)
+    print(f"✨ 核心特性: 326种真QQ表情转换 + 群友昵称感知注入 + 短句节奏控制")
+    print("=" * 65)
     async with serve(ws_handler, "127.0.0.1", port):
         await asyncio.Future()
 

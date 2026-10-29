@@ -1,8 +1,10 @@
 {
-  "gemini_api_key": "YOUR_GEMINI_API_KEY",
-  "gemini_model": "gemini-1.5-pro",
-  "proxy_url": "http://127.0.0.1:7890",
+  "backend": "antigravity",
+  "gemini_model": "flash",
   "bot_ws_port": 8080,
   "max_history_turns": 10,
-  "default_persona": "hajimi"
+  "default_persona": "hajimi",
+  "proxy_url": "http://127.0.0.1:7890",
+  "gemini_api_key": "YOUR_GEMINI_API_KEY",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"
 }
