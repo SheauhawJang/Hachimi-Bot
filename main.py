@@ -21,6 +21,7 @@ from openai import AsyncOpenAI
 from face_converter import format_bot_reply
 from antigravity_bridge import send_to_antigravity
 from session_manager import SessionManager
+from security_guard import SecurityGuard
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
@@ -41,10 +42,11 @@ current_system_prompt = personas_data["personas"].get(
 
 backend = config.get("backend", "antigravity")
 
-# 初始化多群独立原生会话管理器
+# 初始化多群独立原生会话管理器与安全防护盾
 session_mgr = SessionManager()
+security_guard = SecurityGuard(user_cooldown=3.0, group_cooldown=1.2, max_len=150)
 
-# 备用 OpenAI 客户端 (当 backend == "api" 时启用)
+# 备用 OpenAI 客户端
 proxy_url = config.get("proxy_url")
 http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
 base_url = config.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -63,7 +65,7 @@ async def chat_with_llm(session_id: str, prompt_text: str, raw_user_msg: str) ->
 
     try:
         if backend == "antigravity":
-            # 走本地 Antigravity 原生群会话通道 (自动维护长上下文记忆，100% 消耗 Pro 会员，无 500 RPD 限制)
+            # 走本地 Antigravity 物理沙箱隔离通道 (严格 0 额外扣费，无账单风险，工具硬熔断)
             conv_id = session_mgr.get_conv_id(session_id)
             raw_reply, new_conv_id = await send_to_antigravity(
                 conv_id=conv_id,
@@ -74,7 +76,6 @@ async def chat_with_llm(session_id: str, prompt_text: str, raw_user_msg: str) ->
             if new_conv_id:
                 session_mgr.set_conv_id(session_id, new_conv_id)
         else:
-            # 备用 API Key 通道
             messages = [
                 {"role": "system", "content": current_system_prompt},
                 {"role": "user", "content": prompt_text},
@@ -101,14 +102,13 @@ def handle_commands(session_id: str, text: str) -> str | None:
 
     if cmd in ["/help", "帮助", "菜单"]:
         cur_name = personas_data["personas"].get(current_persona_key, {}).get("name", current_persona_key)
-        mode_str = "Antigravity Pro 原生群会话 (0额度限制/自动上下文)" if backend == "antigravity" else "外部 API 通道"
         return (
             f"🐾 【QQ 哈基米 & 麻将助手】\n"
             f"当前人设：{cur_name}\n"
-            f"运行后端：{mode_str}\n"
+            f"安全防线：物理沙箱隔离 + 指令防注入 + 0扣费受控通道\n"
             f"---------------------------\n"
-            f"💬 直接发消息或 @我 即可对话\n"
-            f"🔄 /reset ：清空本群当前的上下文记忆，开启新会话\n"
+            f"💬 @我 即可对话（每人冷却 3 秒）\n"
+            f"🔄 /reset ：清空本群当前的上下文记忆，开启新话题\n"
             f"🎭 /persona ：查看所有可用人设\n"
             f"🎭 /persona [名称] ：切换人设（如 /persona hajimi）\n"
             f"---------------------------"
@@ -162,7 +162,6 @@ async def ws_handler(websocket):
             if msg_type == "private":
                 session_id = f"private_{sender_id}"
                 should_reply = True
-                prompt_text = user_msg
             elif msg_type == "group":
                 self_id = str(data.get("self_id"))
                 at_me = f"[CQ:at,qq={self_id}]"
@@ -170,11 +169,50 @@ async def ws_handler(websocket):
                     should_reply = True
                     user_msg = raw_text.replace(at_me, "").strip()
                 session_id = f"group_{group_id}"
-                # 群聊注入发信人昵称，赋予哈基米真正的认人与称呼能力
-                prompt_text = f"【群友 {sender_name}】: {user_msg}"
 
             if not should_reply or not user_msg:
                 continue
+
+            # 🛡️ 1. 频率与刷屏防护 (Rate Limiting)
+            allowed, cd_reason = security_guard.check_rate_limit(sender_id, group_id)
+            if not allowed:
+                if cd_reason:
+                    payload = {
+                        "action": "send_msg",
+                        "params": {
+                            "message_type": msg_type,
+                            "message": cd_reason,
+                            ("group_id" if msg_type == "group" else "user_id"): (
+                                int(group_id) if msg_type == "group" else int(sender_id)
+                            ),
+                        },
+                    }
+                    await websocket.send(json.dumps(payload))
+                continue
+
+            # 🛡️ 2. 前置安全检测与注入过滤 (在 Python 本地直接阻断，不让大模型看到)
+            is_safe, sanitized_text, reject_reason = security_guard.sanitize_and_inspect(user_msg)
+            if not is_safe:
+                print(f"🛡️ [拦截恶意输入] 来自【{sender_name}】({sender_id}): {reject_reason}")
+                payload = {
+                    "action": "send_msg",
+                    "params": {
+                        "message_type": msg_type,
+                        "message": sanitized_text,
+                        ("group_id" if msg_type == "group" else "user_id"): (
+                            int(group_id) if msg_type == "group" else int(sender_id)
+                        ),
+                    },
+                }
+                await websocket.send(json.dumps(payload))
+                continue
+
+            user_msg = sanitized_text
+            prompt_text = (
+                f"【群友 {sender_name}】: {user_msg}"
+                if msg_type == "group"
+                else user_msg
+            )
 
             print(f"📩 [{session_id}] 收到来自【{sender_name}】的消息: {user_msg}")
 
@@ -186,13 +224,11 @@ async def ws_handler(websocket):
                     "params": {
                         "message_type": msg_type,
                         "message": cmd_reply,
+                        ("group_id" if msg_type == "group" else "user_id"): (
+                            int(group_id) if msg_type == "group" else int(sender_id)
+                        ),
                     },
                 }
-                if msg_type == "group":
-                    reply_payload["params"]["group_id"] = int(group_id)
-                else:
-                    reply_payload["params"]["user_id"] = int(sender_id)
-
                 await websocket.send(json.dumps(reply_payload))
                 continue
 
@@ -206,13 +242,11 @@ async def ws_handler(websocket):
                 "params": {
                     "message_type": msg_type,
                     "message": bot_reply,
+                    ("group_id" if msg_type == "group" else "user_id"): (
+                        int(group_id) if msg_type == "group" else int(sender_id)
+                    ),
                 },
             }
-            if msg_type == "group":
-                reply_payload["params"]["group_id"] = int(group_id)
-            else:
-                reply_payload["params"]["user_id"] = int(sender_id)
-
             await websocket.send(json.dumps(reply_payload))
 
         except Exception as e:
@@ -224,10 +258,10 @@ async def main():
     port = config.get("bot_ws_port", 8080)
     print("=" * 60)
     print("🚀 QQ 哈基米 & 麻将小助手 (QQ-Mahjong-Bot) 正在启动...")
-    print(f"📡 正在监听 NapCatQQ 正向/反向 WebSocket: ws://{host}:{port}/ws")
+    print(f"📡 监听 WebSocket 端口: ws://{host}:{port}/ws")
     print(f"🎭 默认激活人设: 【{current_persona_key}】")
-    mode_desc = "Antigravity Pro 本地会话机制 (0额度扣费 / 自动长上下文)" if backend == "antigravity" else "外部 API 模式"
-    print(f"⚡ 驱动核心: {mode_desc}")
+    print("🛡️ 安全防线: Python网关前置拦截 + 沙箱工作目录 + 敏感指令物理熔断")
+    print("💰 计费模式: 100% 消耗已付 Antigravity Pro 会员，零额外账单风险！")
     print("=" * 60)
 
     server = await serve(ws_handler, host, port)
