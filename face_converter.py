@@ -26,12 +26,39 @@ FACE_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
+def clean_markdown_formatting(text: str) -> str:
+    """清理 QQ 无法原生解析的 Markdown 标记符号（加粗、斜体、标题等），保持群聊排版干净"""
+    if not text:
+        return ""
+    # 1. 移除 Markdown 加粗 **text** -> text, __text__ -> text
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text)
+
+    # 2. 移除行内斜体 *text* 或 _text_（避开乘号与连续星号）
+    text = re.sub(r"(?<!\*)\*([^\*\n]+)\*(?!\*)", r"\1", text)
+
+    # 3. 移除行内代码块 `code` -> code
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+
+    # 4. 移除 Markdown 标题符，例如 ### 标题 -> 标题
+    text = re.sub(r"^\s*#{1,6}\s*", "", text, flags=re.MULTILINE)
+
+    # 5. 移除 Markdown 分隔线 --- 或 ***
+    text = re.sub(r"^\s*[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+
+    # 6. 整理多余的连续换行
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def clean_response_text(text: str) -> str:
-    """清理多余标签与思维链"""
+    """清理多余标签与思维链及 Markdown 标记"""
     if not text:
         return ""
     # 移除 <think> 标签及其内容
     cleaned = THINK_PATTERN.sub("", text)
+    # 移除 QQ 无法渲染的 Markdown 格式符号
+    cleaned = clean_markdown_formatting(cleaned)
     # 去除首尾空白
     return cleaned.strip()
 
