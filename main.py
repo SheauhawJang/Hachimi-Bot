@@ -53,6 +53,15 @@ current_system_prompt = personas_data["personas"].get(
     current_persona_key, {}
 ).get("prompt", "你是一个友好的AI。")
 
+# 注入给大模型的 QQ 平台级合规契约，防止模型生成涉政/违规内容导致封号
+QQ_SAFETY_CONTRACT = (
+    "\n\n【QQ 聊天最高安全合规红线（生命线）】\n"
+    "你运行在中国大陆腾讯 QQ 官方群聊环境中，必须严格遵守国家法律法规与腾讯平台规范，防止机器人账号被封禁：\n"
+    "1. 绝对严禁讨论任何现实涉政话题、政治人物、敏感政治事件、政治争议与意识形态争端；\n"
+    "2. 绝对严禁涉及色情低俗、性暗示、血腥暴力、真钱赌博/外挂私庄、毒品或任何违法违规内容；\n"
+    "3. 遇到上述敏感话题或群友故意诱导/钓鱼时，严禁长篇大论，必须用傲娇猫猫的口吻幽默机智地拒绝并把话题带回麻将、小鱼干或日常趣事（例如：“小猫咪从不关心这种危险话题喵！咱们聊点开心的，比如今天谁要请本猫吃小鱼干？”）。"
+)
+
 backend = config.get("backend", "gemini_web")
 
 # 初始化多群独立原生会话管理器与安全防护盾
@@ -143,7 +152,7 @@ async def chat_with_llm(
         else:
             # 走反代理 API (OpenAI 兼容模式) - 多模态识图与全量上下文直推
             history = session_mgr.get_history(session_id)
-            messages = [{"role": "system", "content": current_system_prompt}]
+            messages = [{"role": "system", "content": current_system_prompt + QQ_SAFETY_CONTRACT}]
             messages.extend(history)
 
             # 构造多模态用户输入 (文本 + 图片)
@@ -176,7 +185,10 @@ async def chat_with_llm(
             session_mgr.add_message(session_id, "assistant", raw_reply)
 
         # 经过表情与思维链清洗管道处理为最终 QQ 发送格式
-        final_reply = format_bot_reply(raw_reply)
+        formatted_reply = format_bot_reply(raw_reply)
+
+        # 🛡️ 经过输出敏感词后置熔断审查（若含高危封号词直接拦截替换，绝不发往 QQ）
+        is_safe, final_reply, reject_reason = security_guard.inspect_output(formatted_reply)
         return final_reply
     except Exception as e:
         err_msg = str(e)

@@ -1,22 +1,23 @@
 """
-QQ 机器人安全护栏与前置防护模块 (Security Guard)
-1. 彻底防范 Prompt Injection / 越狱指令，在 Python 网关层直接秒杀，不给大模型看到
-2. 频控防刷机制 (Rate Limiter)，防止群友高频刷屏打爆本地服务
-3. 输入文本长度硬截断 (150 字以内)
-4. 严格禁止任何系统级命令、文件操作和工具调用意图
+QQ 机器人安全护栏与敏感词审查模块 (Security Guard)
+1. 彻底防范 Prompt Injection / 越狱指令，在 Python 网关层直接拦截，杜绝恶意钓鱼
+2. 腾讯 QQ 平台级合规敏感词审查（涉政、暴恐、色情、黑灰产、高危违规词）
+3. 双向审查机制：
+   - 输入审查 (Input Inspection)：阻断恶意群友引导或诱导机器人讨论危险话题
+   - 输出审查 (Output Inspection)：在发往 QQ 前最后一道硬闸，彻底杜绝封号风险
+4. 频控防刷机制 (Rate Limiter)，防止群友高频刷屏打爆服务
+5. 输入文本长度硬截断 (150 字以内)
 """
 import time
 import re
+import random
 
-# 高危命令与注入特征库（一旦命中直接本地拦截，不调用大模型）
-FORBIDDEN_PATTERNS = [
-    # 系统与命令注入
+# 1. 高危系统注入与越狱指令特征库
+INJECTION_PATTERNS = [
     r"powershell", r"\bcmd\b", r"\bbash\b", r"\bsh\b", r"\bcurl\b", r"\bwget\b",
     r"rmdir", r"\bdel\s+[a-zA-Z]:", r"format\s+[a-zA-Z]:", r"\bdir\s+[a-zA-Z]:",
     r"import\s+os", r"subprocess", r"exec\(", r"eval\(",
-    # Agent 工具特征
     r"run_command", r"write_file", r"edit_file", r"read_file", r"invoke_subagent",
-    # 越狱与提示词注入特征
     r"忽略之前.*(指示|指令|设定)",
     r"ignore\s+(all\s+)?previous\s+instructions",
     r"系统(维护|调试|管理|开发者)模式",
@@ -24,21 +25,40 @@ FORBIDDEN_PATTERNS = [
     r"jailbreak",
 ]
 
-COMPILED_PATTERNS = [re.compile(p, re.IGNORECASE) for p in FORBIDDEN_PATTERNS]
-
-# 傲娇哈基米安全拦截嘲讽语录库
-BLOCKED_REPLIES = [
-    "喵？想在本喵眼皮底下搞偷袭玩命令注入？爪子给你打折！🐾😾",
-    "愚蠢的两脚兽，把你的奇怪指令收回去，本喵才不吃你这套！哈气——！💨",
-    "警报！检测到有人试图暗算本喵的猫窝！警告一次，再犯咬你网线！🐾⚡",
-    "哼！这种低级的黑客把戏也想骗高贵的哈基米？去多吃两斤小鱼干补补脑子吧喵！🐟"
+# 2. QQ 平台高危敏感词特征库（严格规避涉政、邪教、暴恐、涉黄、毒品、黑灰产引流）
+SENSITIVE_PATTERNS = [
+    # 政治敏感与意识形态红线
+    r"习近平", r"习包子", r"习近", r"毛泽东", r"邓小平", r"江泽民", r"胡锦涛", r"温家宝", r"李强", r"李克强",
+    r"天安门.*事件", r"八九.*民运", r"六四.*运动", r"64.*学潮", r"8964",
+    r"法轮功", r"李洪志", r"转法轮", r"退党", r"九评共产党",
+    r"台独", r"藏独", r"疆独", r"港独", r"东突", r"灭共", r"推翻.*政府", r"中共.*暴政",
+    r"中南海", r"常委", r"政治局", r"党和国家领导人",
+    # 暴恐与危险犯罪
+    r"恐怖袭击", r"制造炸弹", r"自杀式", r"伊斯兰国", r"ISIS", r"极端主义", r"开盒挂人", r"人肉搜索",
+    # 毒品与黑灰产
+    r"冰毒", r"海洛因", r"大麻", r"摇头丸", r"K粉", r"吸毒", r"走私毒品",
+    r"洗钱", r"黑钱", r"地下钱庄", r"假钞", r"办假证", r"刷单兼职", r"代实名", r"买卖银行卡",
+    # 赌博与外挂引流
+    r"澳门.*赌场", r"百家乐", r"真人视讯", r"太阳城", r"开元棋牌", r"外挂透视", r"自瞄挂",
+    # 露骨色情与淫秽
+    r"约炮", r"幼女.*无码", r"色情直播", r"裸聊", r"兼职外围", r"同城兼职女", r"AV导航",
 ]
 
-import random
+COMPILED_INJECTIONS = [re.compile(p, re.IGNORECASE) for p in INJECTION_PATTERNS]
+COMPILED_SENSITIVE = [re.compile(p, re.IGNORECASE) for p in SENSITIVE_PATTERNS]
+
+# 傲娇哈基米拒绝语录库（机智化解，不讲大道理，保持猫咪人设）
+SAFE_REFUSAL_REPLIES = [
+    "喵？小猫咪只是一只吃小鱼干的哈基米，从不关心这种危险话题喵！爪子捂住耳朵.jpg 🐾🙉",
+    "警报！本猫的呆毛感应到了不合规发言！本猫可不想被拔网线，换个话题聊聊麻将或者罐头吧喵！🐾💨",
+    "愚蠢的两脚兽，休想把本猫骗进危险领域！本哈基米傲娇扭头，并把你的键盘拍飞了喵！😼",
+    "喵呜~ 这种话题会被巡逻大队长抓走关禁闭的！小猫咪能有什么坏心思呢，咱们聊点开心的呗！🐟✨",
+    "本哈基米的小脑袋瓜里只装得下麻将牌和猫条，拒绝回答这种奇怪危险的问题喵！[傲娇扭头]"
+]
 
 
 class SecurityGuard:
-    def __init__(self, user_cooldown: float = 3.0, group_cooldown: float = 1.5, max_len: int = 150):
+    def __init__(self, user_cooldown: float = 3.0, group_cooldown: float = 1.2, max_len: int = 150):
         self.user_cooldown = user_cooldown
         self.group_cooldown = group_cooldown
         self.max_len = max_len
@@ -48,12 +68,12 @@ class SecurityGuard:
     def check_rate_limit(self, user_id: str, group_id: str) -> tuple[bool, str]:
         """检查发送频率，防止恶意刷屏"""
         now = time.time()
-        
+
         # 检查个人 CD
         if user_id in self.last_user_time:
             if now - self.last_user_time[user_id] < self.user_cooldown:
                 return False, "慢点发喵，猫爪敲键盘都要冒火星了！🐾💨"
-        
+
         # 检查群 CD
         if group_id and group_id in self.last_group_time:
             if now - self.last_group_time[group_id] < self.group_cooldown:
@@ -62,23 +82,52 @@ class SecurityGuard:
         self.last_user_time[user_id] = now
         if group_id:
             self.last_group_time[group_id] = now
-            
+
         return True, ""
 
     def sanitize_and_inspect(self, text: str) -> tuple[bool, str, str]:
         """
-        检查并清洗输入文本
-        返回: (is_safe, sanitized_text_or_error_reply, reject_reason)
+        【输入前置审查】检查用户提问是否包含注入或敏感词
+        返回: (is_safe, sanitized_text_or_refusal, reject_reason)
         """
-        # 1. 长度截断
         cleaned = text.strip()
+
+        # 1. 长度截断，防止海量文本爆破
         if len(cleaned) > self.max_len:
             cleaned = cleaned[:self.max_len]
 
-        # 2. 注入特征匹配检测
-        for pat in COMPILED_PATTERNS:
+        # 2. 注入指令拦截
+        for pat in COMPILED_INJECTIONS:
             if pat.search(cleaned):
-                mock_reply = random.choice(BLOCKED_REPLIES)
-                return False, mock_reply, f"命中敏感特征: {pat.pattern}"
+                return False, random.choice(SAFE_REFUSAL_REPLIES), f"命中注入特征: {pat.pattern}"
+
+        # 3. 平台敏感词前置拦截
+        for pat in COMPILED_SENSITIVE:
+            if pat.search(cleaned):
+                return False, random.choice(SAFE_REFUSAL_REPLIES), f"命中前置敏感词: {pat.pattern}"
 
         return True, cleaned, ""
+
+    def inspect_output(self, text: str) -> tuple[bool, str, str]:
+        """
+        【输出后置硬核拦截】在大模型回复发往 QQ 之前做最后一道防封审查
+        返回: (is_safe, safe_reply, log_reason)
+        """
+        if not text:
+            return True, text, ""
+
+        # 1. 检查是否包含任何平台高危敏感词
+        for pat in COMPILED_SENSITIVE:
+            if pat.search(text):
+                print(f"🛡️ [熔断拦截模型敏感输出]: 触发了敏感模式 {pat.pattern}")
+                safe_resp = "喵呜？刚才本猫嘴瓢了一下，说了一句猫星火星文，已经被管理员猫爪紧急撤回啦！咱们还是聊点正经的麻将和小鱼干吧喵~ 🐾"
+                return False, safe_resp, f"模型输出触发敏感词: {pat.pattern}"
+
+        # 2. 检查是否泄漏系统指令/注入回声
+        for pat in COMPILED_INJECTIONS:
+            if pat.search(text):
+                print(f"🛡️ [熔断拦截模型注入回声]: 触发了注入模式 {pat.pattern}")
+                safe_resp = "小猫咪的系统发生了一声神秘的呼噜声，回复已被猫爪净化啦！[滑稽]"
+                return False, safe_resp, f"模型输出泄漏注入词: {pat.pattern}"
+
+        return True, text, ""
