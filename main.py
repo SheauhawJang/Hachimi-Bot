@@ -5,6 +5,7 @@ import sys
 import re
 import time
 import httpx
+from pathlib import Path
 
 # 适配 Windows 控制台输出 UTF-8 / Emoji
 if sys.platform == "win32":
