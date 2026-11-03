@@ -88,16 +88,26 @@ TOKEN_REFRESH_SKEW = 120  # refresh this many seconds before actual expiry
 # Model mapping: OpenAI-facing name -> (backend model name, thinking level).
 # Gemini 3 Pro models use the base name "gemini-3.1-pro-low" and control
 # thinking compute via generationConfig.thinkingConfig.thinkingLevel.
+# 精确匹配 Google 官方最新的真实模型映射
 MODEL_MAP = {
-    "gemini-2.5-flash": ("gemini-2.5-flash", None),
-    "gemini-2.5-pro": ("gemini-2.5-pro", None),
-    "gemini-3-flash": ("gemini-3-flash", None),
+    # 用户控制台对应的 Gemini 3 系列真实模型
+    "gemini-3.8-flash": ("gemini-3.8-flash-tiered", None),
+    "gemini-3.6-flash": ("gemini-3-flash", None),
     "gemini-3.5-flash-lite": ("gemini-3.5-flash-lite", None),
+    "gemini-3-flash": ("gemini-3-flash", None),
+    
+    # Antigravity 官方三档别名 (对应 tieredModelIds)
+    "flash": ("gemini-3.8-flash-tiered", None),
+    "flash_lite": ("gemini-3.5-flash-lite", None),
+    "pro": ("gemini-3.8-flash-tiered", "high"),
+    
+    # Claude 真实模型
     "claude-sonnet": ("claude-sonnet-5-5-medium", None),
     "claude-opus": ("claude-opus-5-5-high", None),
+    "claude": ("claude-sonnet-5-5-medium", None),
 }
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Token / OAuth management (thread-safe)
@@ -707,6 +717,8 @@ def _build_gemini_request(body: dict, backend_model: str, thinking_level: str = 
         thinking_cfg.setdefault("thinkingLevel", thinking_level)
         thinking_cfg.setdefault("includeThoughts", False)
         gen_config["thinkingConfig"] = thinking_cfg
+    elif "flash-tiered" in backend_model and "thinkingConfig" not in gen_config:
+        gen_config["thinkingConfig"] = {"thinkingBudget": 32}
     if gen_config:
         inner["generationConfig"] = gen_config
 
