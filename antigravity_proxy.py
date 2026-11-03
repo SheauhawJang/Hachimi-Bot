@@ -112,6 +112,18 @@ MODEL_MAP = {
     "flash": ("gemini-3.8-flash-tiered", None),
     "flash_lite": ("gemini-3.5-flash-lite", None),
     "pro": ("gemini-3.8-flash-tiered", "high"),
+
+    # 带思考档位的别名（通过 thinkingConfig.thinkingLevel 注入；未实测后端是否全部接受）
+    "gemini-3.8-flash-minimal": ("gemini-3.8-flash-tiered", "minimal"),
+    "gemini-3.8-flash-low": ("gemini-3.8-flash-tiered", "low"),
+    "gemini-3.8-flash-medium": ("gemini-3.8-flash-tiered", "medium"),
+    "gemini-3.8-flash-high": ("gemini-3.8-flash-tiered", "high"),
+    "gemini-3-flash-minimal": ("gemini-3-flash", "minimal"),
+    "gemini-3-flash-low": ("gemini-3-flash", "low"),
+    "gemini-3-flash-medium": ("gemini-3-flash", "medium"),
+    "gemini-3-flash-high": ("gemini-3-flash", "high"),
+    "pro-low": ("gemini-3.8-flash-tiered", "low"),
+    "pro-medium": ("gemini-3.8-flash-tiered", "medium"),
     
     # Claude 真实模型
     "claude-sonnet": ("claude-sonnet-5-5-medium", None),
@@ -1058,27 +1070,33 @@ def _resolve_url(envelope: dict, streaming: bool = False) -> str:
     return f"{base}/v1internal:{endpoint}"
 
 
+# Shared persistent HTTP connection pool for fast, reliable upstream requests
+_http_pool = httpx.Client(
+    timeout=httpx.Timeout(UPSTREAM_TIMEOUT, connect=30.0),
+    limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+    follow_redirects=True,
+)
+
+
 def call_generate_content(envelope: dict) -> dict:
     """Non-streaming call. Returns the unwrapped inner Gemini response dict."""
     url = _resolve_url(envelope, streaming=False)
-    req = _make_upstream_request(url, envelope, streaming=False)
+    headers = {
+        "Authorization": f"Bearer {get_access_token()}",
+        "Content-Type": "application/json",
+        "User-Agent": ANTIGRAVITY_USER_AGENT,
+        "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
+        "Client-Metadata": CLIENT_METADATA,
+    }
     try:
-        with urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
-            raw = resp.read().decode()
-    except HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode()
-        except Exception:
-            pass
-        raise UpstreamError(f"Upstream HTTP {e.code}: {detail}", status=e.code, body=detail)
-    except URLError as e:
+        resp = _http_pool.post(url, json=envelope, headers=headers)
+        if resp.status_code != 200:
+            raise UpstreamError(f"Upstream HTTP {resp.status_code}: {resp.text}", status=resp.status_code, body=resp.text)
+        payload = resp.json()
+    except httpx.RequestError as e:
         raise UpstreamError(f"Upstream network error: {e}", status=502)
-
-    try:
-        payload = json.loads(raw)
     except json.JSONDecodeError:
-        raise UpstreamError(f"Upstream returned non-JSON: {raw[:500]}", status=502)
+        raise UpstreamError(f"Upstream returned non-JSON: {resp.text[:500]}", status=502)
 
     # Unwrap the envelope: {"response": {<gemini>}} or sometimes bare.
     if isinstance(payload, dict) and "response" in payload:
