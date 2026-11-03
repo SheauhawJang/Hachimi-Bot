@@ -91,6 +91,31 @@ client = AsyncOpenAI(
 )
 
 
+SESSION_MODELS_FILE = Path("data/session_models.json")
+
+
+def load_session_models() -> dict[str, str]:
+    if SESSION_MODELS_FILE.exists():
+        try:
+            with open(SESSION_MODELS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_session_models(models_map: dict[str, str]):
+    try:
+        SESSION_MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(SESSION_MODELS_FILE, "w", encoding="utf-8") as f:
+            json.dump(models_map, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"保存会话模型失败: {e}")
+
+
+session_models: dict[str, str] = load_session_models()
+
+
 async def download_image(url: str) -> str | None:
     """下载 QQ 群消息中的图片到临时缓存"""
     try:
@@ -128,7 +153,9 @@ async def chat_with_llm(
     image_paths: list[str] | None = None,
 ) -> str:
     global current_system_prompt
-    model = config.get("gemini_model", "flash")
+    # 会话独立模型：优先使用该会话设定的模型，未设定则使用 default_model (默认 3.5 flash lite)
+    default_m = config.get("default_model", config.get("gemini_model", "gemini-3.5-flash-lite"))
+    model = session_models.get(session_id, default_m)
 
     try:
         if backend == "gemini_web":
@@ -208,22 +235,25 @@ async def chat_with_llm(
         return f"【对话出错】：{err_msg}{hint}"
 
 
-def handle_commands(session_id: str, text: str) -> str | None:
+def handle_commands(session_id: str, text: str, sender_id: str = "") -> str | None:
     global current_persona_key, current_system_prompt
     cmd = text.strip()
 
     if cmd in ["/help", "帮助", "菜单"]:
         cur_name = personas_data["personas"].get(current_persona_key, {}).get("name", current_persona_key)
         mode_desc = "Gemini Web (多模态识图 / 自动Cookie刷新)" if backend == "gemini_web" else "Antigravity Pro 沙箱"
+        default_m = config.get("default_model", "gemini-3.5-flash-lite")
+        cur_session_m = session_models.get(session_id, default_m)
         return (
             f"🐾 【QQ 哈基米 & 麻将多模态助手】\n"
             f"当前人设：{cur_name}\n"
+            f"当前模型：{cur_session_m}（会话独立）\n"
             f"驱动核心：{mode_desc}\n"
             f"---------------------------\n"
             f"💬 @我 发送文字或麻将截图即可对话/分析何切\n"
             f"🔄 /reset ：清空本群当前的上下文记忆，开启新话题\n"
             f"🎭 /persona ：查看或切换人设（如 /persona hajimi）\n"
-            f"🤖 /model ：查看或切换模型（如 /model gemini-3.8-flash）\n"
+            f"🤖 /model ：查看或切换当前群/会话的大模型（管理员指令）\n"
             f"---------------------------"
         )
 
@@ -256,11 +286,11 @@ def handle_commands(session_id: str, text: str) -> str | None:
     if cmd.startswith("/model"):
         parts = cmd.split()
         supported_models = {
-            "gemini-3.8-flash": "Gemini 3.8 Flash（默认推荐，联网搜索与资讯最准）",
+            "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite（系统默认主力，超低延迟、极度省额度）",
+            "gemini-3.8-flash": "Gemini 3.8 Flash（高阶联网推理，查比赛查资讯最准）",
             "gemini-4-argon": "Gemini 4 Argon（谷歌下一代旗舰推理大模型，可通过 /model argon 切换）",
             "claude-opus": "Claude Opus 5.5 High（顶尖复杂推理与长文本思维链）",
             "claude-sonnet": "Claude Sonnet 5.5 Medium（极佳代码逻辑与分析能力）",
-            "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite（超低延迟、极度省额度）",
             "gemini-3-flash": "Gemini 3 Flash（标准 Flash）",
             "gemini-2.5-pro": "Gemini 2.5 Pro（深度思维链推理）",
         }
@@ -275,31 +305,55 @@ def handle_commands(session_id: str, text: str) -> str | None:
             "lite": "gemini-3.5-flash-lite",
             "pro": "gemini-2.5-pro",
         }
-        if len(parts) > 1:
-            raw_target = parts[1].lower()
-            target = model_aliases.get(raw_target, raw_target)
-            if target in supported_models:
+        default_m = config.get("default_model", "gemini-3.5-flash-lite")
+        cur_session_m = session_models.get(session_id, default_m)
+
+        # 1. 仅查看指令 (无参数)
+        if len(parts) == 1:
+            lines = [
+                f"当前会话运行模型：【{cur_session_m}】（会话独立）",
+                f"系统全局默认模型：【{default_m}】",
+                "\n可用模型列表："
+            ]
+            for m_id, m_desc in supported_models.items():
+                lines.append(f"  • `{m_id}`\n    └ {m_desc}")
+            lines.append("\n💡 提示：管理员发送 `/model <模型名>` 可切换本群模型；发送 `/model global <模型名>` 可切换全局默认。")
+            return "\n".join(lines)
+
+        # 2. 权限审查：只有管理员白名单才允许变更模型
+        admin_users = [str(u) for u in config.get("admin_users", [])]
+        is_admin = (not sender_id) or (sender_id in admin_users)
+        if not is_admin:
+            return "喵？只有主人/管理员才可以调整本猫的大模型核心喵！爪子拍开你的手.jpg 🐾😼"
+
+        # 3. 管理员切换模型
+        is_global = False
+        target_arg = parts[1].lower()
+        if target_arg in ["global", "全局"] and len(parts) > 2:
+            is_global = True
+            target_arg = parts[2].lower()
+
+        target = model_aliases.get(target_arg, target_arg)
+        if target in supported_models:
+            if is_global:
+                config["default_model"] = target
                 config["gemini_model"] = target
-                # 持久化到 config.json
                 try:
                     with open("config.json", "w", encoding="utf-8") as f:
                         json.dump(config, f, indent=4, ensure_ascii=False)
                 except Exception:
                     pass
-                return (
-                    f"🤖 模型已成功手动切换为：【{target}】！\n"
-                    f"说明：{supported_models[target]}\n"
-                    f"💡 随时可发送 `/model flash` 或 `/model gemini-3.8-flash` 切回默认推荐模型喵~"
-                )
+                return f"🌐 [全局切换成功] 默认基础模型已变更为：【{target}】！\n说明：{supported_models[target]}"
             else:
-                return f"⚠️ 未识别的模型名称「{parts[1]}」。发送 `/model` 可查看当前支持的模型列表喵~"
+                session_models[session_id] = target
+                save_session_models(session_models)
+                return (
+                    f"🤖 [会话模型已切换] 当前会话（群/私聊）已绑定模型：【{target}】！\n"
+                    f"说明：{supported_models[target]}\n"
+                    f"💡 本次设置仅对本会话生效，其他群保持默认独立，完全不冲突喵~"
+                )
         else:
-            cur_model = config.get("gemini_model", "gemini-3.8-flash")
-            lines = [f"当前运行模型：【{cur_model}】", "可用模型及手动切换指令："]
-            for m_id, m_desc in supported_models.items():
-                lines.append(f"  • `/model {m_id}`\n    └ {m_desc}")
-            lines.append("\n💡 提示：输入 `/model <模型名>`（支持简写如 `/model argon`、`/model flash`）即可手动切换，完全不会自动更改。")
-            return "\n".join(lines)
+            return f"⚠️ 未识别的模型名称「{target_arg}」。发送 `/model` 可查看支持的模型列表喵~"
 
     return None
 
@@ -447,7 +501,7 @@ async def handle_single_message(websocket, data: dict):
         print(f"📩 [{session_id}] 收到来自【{sender_name}】的消息: {user_msg} (附图: {len(image_paths)})")
 
         # 优先处理内置快捷指令
-        cmd_reply = handle_commands(session_id, user_msg)
+        cmd_reply = handle_commands(session_id, user_msg, sender_id=sender_id)
         if cmd_reply:
             reply_payload = {
                 "action": "send_msg",
