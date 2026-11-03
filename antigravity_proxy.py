@@ -201,18 +201,19 @@ def _read_from_windows_keyring():
 
 
 def _read_token_from_disk():
-    """Read and parse the token file. Returns the raw dict or None."""
+    """Read and parse the token. On Windows, read directly from Windows Credential Manager first."""
+    if sys.platform == "win32":
+        data = _read_from_windows_keyring()
+        if data and data.get("token", {}).get("access_token"):
+            _write_token_to_disk(data)
+            return data
+
     if os.path.exists(TOKEN_FILE):
         try:
             with open(TOKEN_FILE, "r") as f:
                 return json.load(f)
         except Exception:
             pass
-    if sys.platform == "win32":
-        data = _read_from_windows_keyring()
-        if data:
-            _write_token_to_disk(data)
-            return data
     return None
 
 
@@ -277,6 +278,19 @@ def get_access_token() -> str:
     """Return a valid access token, refreshing if necessary. Thread-safe."""
     global _cached_access_token
     with _token_lock:
+        now = time.time()
+        # On Windows, always check Windows Credential Manager first for the freshest token
+        if sys.platform == "win32":
+            data = _read_from_windows_keyring()
+            if data:
+                token_obj = data.get("token") or {}
+                acc = token_obj.get("access_token")
+                exp = _parse_expiry(token_obj.get("expiry"))
+                if acc and (exp - now) > TOKEN_REFRESH_SKEW:
+                    _cached_access_token = acc
+                    _write_token_to_disk(data)
+                    return acc
+
         data = _read_token_from_disk()
         if not data:
             raise RuntimeError(
@@ -286,7 +300,6 @@ def get_access_token() -> str:
         token_obj = data.get("token") or {}
         access_token = token_obj.get("access_token")
         expiry_ts = _parse_expiry(token_obj.get("expiry"))
-        now = time.time()
 
         needs_refresh = (
             not access_token
@@ -295,6 +308,17 @@ def get_access_token() -> str:
         )
 
         if needs_refresh:
+            # Check keyring one more time
+            if sys.platform == "win32":
+                keyring_data = _read_from_windows_keyring()
+                if keyring_data:
+                    k_token = keyring_data.get("token") or {}
+                    k_exp = _parse_expiry(k_token.get("expiry"))
+                    if k_token.get("access_token") and (k_exp - now) > TOKEN_REFRESH_SKEW:
+                        _cached_access_token = k_token["access_token"]
+                        _write_token_to_disk(keyring_data)
+                        return _cached_access_token
+
             refresh_token = token_obj.get("refresh_token")
             if not refresh_token:
                 raise RuntimeError("No refresh_token available; re-run `agy` to authenticate.")
