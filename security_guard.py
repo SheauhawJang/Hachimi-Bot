@@ -11,6 +11,30 @@ QQ 机器人安全护栏与敏感词审查模块 (Security Guard)
 import time
 import re
 import random
+import os
+import datetime
+from pathlib import Path
+
+# 日志存储路径：qq-mahjong-bot/logs/security.log
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+SECURITY_LOG_FILE = LOG_DIR / "security.log"
+
+
+def log_security_event(event_type: str, reason: str, matched_text: str, full_content: str, session_id: str = ""):
+    """持久化记录安全事件到 logs/security.log 文件"""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sid_info = f"[{session_id}] " if session_id else ""
+        log_line = (
+            f"[{timestamp}] [{event_type}] {sid_info}{reason} | 命中词: 「{matched_text}」\n"
+            f"  原始内容: {full_content.strip()}\n"
+            f"{'-' * 70}\n"
+        )
+        with open(SECURITY_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(log_line)
+    except Exception as e:
+        print(f"写入安全日志失败: {e}", flush=True)
 
 # 1. 高危系统注入与越狱指令特征库
 INJECTION_PATTERNS = [
@@ -85,7 +109,7 @@ class SecurityGuard:
 
         return True, ""
 
-    def sanitize_and_inspect(self, text: str) -> tuple[bool, str, str]:
+    def sanitize_and_inspect(self, text: str, session_id: str = "") -> tuple[bool, str, str]:
         """
         【输入前置审查】检查用户提问是否包含注入或敏感词
         返回: (is_safe, sanitized_text_or_refusal, reject_reason)
@@ -98,17 +122,27 @@ class SecurityGuard:
 
         # 2. 注入指令拦截
         for pat in COMPILED_INJECTIONS:
-            if pat.search(cleaned):
-                return False, random.choice(SAFE_REFUSAL_REPLIES), f"命中注入特征: {pat.pattern}"
+            m = pat.search(cleaned)
+            if m:
+                matched_str = m.group(0)
+                reason = f"命中注入特征: {pat.pattern}"
+                log_security_event("用户输入拦截", reason, matched_str, cleaned, session_id)
+                print(f"🛡️ [拦截恶意输入] {session_id} 命中注入: {matched_str} (模式: {pat.pattern})", flush=True)
+                return False, random.choice(SAFE_REFUSAL_REPLIES), reason
 
         # 3. 平台敏感词前置拦截
         for pat in COMPILED_SENSITIVE:
-            if pat.search(cleaned):
-                return False, random.choice(SAFE_REFUSAL_REPLIES), f"命中前置敏感词: {pat.pattern}"
+            m = pat.search(cleaned)
+            if m:
+                matched_str = m.group(0)
+                reason = f"命中前置敏感词: {pat.pattern}"
+                log_security_event("用户输入拦截", reason, matched_str, cleaned, session_id)
+                print(f"🛡️ [拦截敏感输入] {session_id} 命中敏感词: {matched_str} (模式: {pat.pattern})", flush=True)
+                return False, random.choice(SAFE_REFUSAL_REPLIES), reason
 
         return True, cleaned, ""
 
-    def inspect_output(self, text: str) -> tuple[bool, str, str]:
+    def inspect_output(self, text: str, session_id: str = "") -> tuple[bool, str, str]:
         """
         【输出后置硬核拦截】在大模型回复发往 QQ 之前做最后一道防封审查
         返回: (is_safe, safe_reply, log_reason)
@@ -118,16 +152,24 @@ class SecurityGuard:
 
         # 1. 检查是否包含任何平台高危敏感词
         for pat in COMPILED_SENSITIVE:
-            if pat.search(text):
-                print(f"🛡️ [熔断拦截模型敏感输出]: 触发了敏感模式 {pat.pattern}")
+            m = pat.search(text)
+            if m:
+                matched_str = m.group(0)
+                reason = f"模型输出触发敏感词: {pat.pattern}"
+                log_security_event("模型输出拦截", reason, matched_str, text, session_id)
+                print(f"🛡️ [熔断拦截模型敏感输出] {session_id}: 命中敏感词「{matched_str}」 (模式: {pat.pattern})", flush=True)
                 safe_resp = "喵呜？刚才本猫嘴瓢了一下，说了一句猫星火星文，已经被管理员猫爪紧急撤回啦！咱们还是聊点正经的麻将和小鱼干吧喵~ 🐾"
-                return False, safe_resp, f"模型输出触发敏感词: {pat.pattern}"
+                return False, safe_resp, reason
 
         # 2. 检查是否泄漏系统指令/注入回声
         for pat in COMPILED_INJECTIONS:
-            if pat.search(text):
-                print(f"🛡️ [熔断拦截模型注入回声]: 触发了注入模式 {pat.pattern}")
+            m = pat.search(text)
+            if m:
+                matched_str = m.group(0)
+                reason = f"模型输出泄漏注入词: {pat.pattern}"
+                log_security_event("模型输出拦截", reason, matched_str, text, session_id)
+                print(f"🛡️ [熔断拦截模型注入回声] {session_id}: 命中注入词「{matched_str}」 (模式: {pat.pattern})", flush=True)
                 safe_resp = "小猫咪的系统发生了一声神秘的呼噜声，回复已被猫爪净化啦！[滑稽]"
-                return False, safe_resp, f"模型输出泄漏注入词: {pat.pattern}"
+                return False, safe_resp, reason
 
         return True, text, ""

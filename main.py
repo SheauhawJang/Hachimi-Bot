@@ -196,7 +196,7 @@ async def chat_with_llm(
         formatted_reply = format_bot_reply(raw_reply)
 
         # 🛡️ 经过输出敏感词后置熔断审查（若含高危封号词直接拦截替换，绝不发往 QQ）
-        is_safe, final_reply, reject_reason = security_guard.inspect_output(formatted_reply)
+        is_safe, final_reply, reject_reason = security_guard.inspect_output(formatted_reply, session_id=session_id)
         return final_reply
     except Exception as e:
         err_msg = str(e)
@@ -388,7 +388,7 @@ async def handle_single_message(websocket, data: dict):
             return
 
         # 🛡️ 2. 前置安全检测与注入过滤
-        is_safe, sanitized_text, reject_reason = security_guard.sanitize_and_inspect(clean_text)
+        is_safe, sanitized_text, reject_reason = security_guard.sanitize_and_inspect(clean_text, session_id=session_id)
         if not is_safe:
             print(f"🛡️ [拦截恶意输入] 来自【{sender_name}】({sender_id}): {reject_reason}")
             payload = {
