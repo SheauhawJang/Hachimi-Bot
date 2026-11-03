@@ -129,7 +129,7 @@ async def chat_with_llm(
             if new_conv_id:
                 session_mgr.set_conv_id(session_id, new_conv_id)
         else:
-            # 走反代理 API (OpenAI 兼容模式) - 自动维系该群独立上下文记忆
+            # 走反代理 API (OpenAI 兼容模式) - 直接追加消息堆入，由 Gemini 原生处理上下文与缓存压缩
             history = session_mgr.get_history(session_id)
             messages = [{"role": "system", "content": current_system_prompt}]
             messages.extend(history)
@@ -142,7 +142,7 @@ async def chat_with_llm(
             )
             raw_reply = response.choices[0].message.content.strip()
 
-            # 记录本轮对话到该群独立历史中 (受滑动窗口严格限制，不乱烧 token)
+            # 直接追加对话，无任何人工滑动窗口截断
             session_mgr.add_message(session_id, "user", prompt_text)
             session_mgr.add_message(session_id, "assistant", raw_reply)
 
