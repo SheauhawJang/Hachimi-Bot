@@ -177,8 +177,15 @@ async def chat_with_llm(
             if config.get("enable_web_search", False):
                 req_params["extra_body"] = {"web_search": True}
 
-            response = await client.chat.completions.create(**req_params)
-            raw_reply = response.choices[0].message.content.strip()
+            try:
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(**req_params),
+                    timeout=35.0,
+                )
+                raw_reply = response.choices[0].message.content.strip()
+            except asyncio.TimeoutError:
+                print(f"⏱️ [模型调用超时] {session_id} 请求超过 35 秒未返回")
+                raw_reply = "[爪子挠头] 喵呜？刚才联网检索或模型思考超时啦，网速太慢了喵！群友请再试一次喵~"
 
             # 记录本轮对话到历史（历史中仅记录文本标记，避免膨胀 sessions 存储体积）
             hist_text = prompt_text + (" [发送了图片附件]" if image_paths else "")
@@ -293,6 +300,169 @@ def extract_image_urls(data: dict) -> list[str]:
     return urls
 
 
+async def handle_single_message(websocket, data: dict):
+    """异步并发处理单条 QQ 消息，彻底避免耗时查询阻塞 WebSocket 接收循环"""
+    try:
+        msg_type = data.get("message_type")  # "private" 或 "group"
+        raw_text = data.get("raw_message", "").strip()
+        sender_info = data.get("sender", {})
+        sender_id = str(data.get("user_id"))
+        group_id = str(data.get("group_id", ""))
+
+        # 🖼️ 全局嗅探群内图片并更新近期缓存（只要有人发图就暂存 3 分钟，方便后续何切/看图提问）
+        found_urls = extract_image_urls(data)
+        if found_urls and group_id:
+            for u in found_urls[:2]:
+                local_img = await download_image(u)
+                if local_img:
+                    if group_id not in recent_group_images:
+                        recent_group_images[group_id] = []
+                    recent_group_images[group_id].append({"time": time.time(), "path": local_img})
+                    recent_group_images[group_id] = recent_group_images[group_id][-5:]
+
+        # 提取发送者昵称（群名片优先）
+        sender_name = sender_info.get("card") or sender_info.get("nickname") or f"用户_{sender_id}"
+
+        should_reply = False
+        user_msg = raw_text
+
+        if msg_type == "private":
+            session_id = f"private_{sender_id}"
+            should_reply = True
+        elif msg_type == "group":
+            self_id = str(data.get("self_id"))
+            at_me = f"[CQ:at,qq={self_id}]"
+            if at_me in raw_text:
+                should_reply = True
+                user_msg = raw_text.replace(at_me, "").strip()
+            session_id = f"group_{group_id}"
+
+        if not should_reply:
+            return
+
+        # 🖼️ 提取多模态图片附件
+        image_paths = []
+        if found_urls:
+            print(f"📸 检测到当前提问消息附带 {len(found_urls)} 张图片，正在处理...")
+            for u in found_urls[:2]:
+                local_img = await download_image(u)
+                if local_img and local_img not in image_paths:
+                    image_paths.append(local_img)
+
+        # 🧠 智能图片回溯：如果当前消息没带图，但群友说了“何切/怎么打/识别”或回复了带图消息，自动绑定群内最近截图
+        if not image_paths and group_id in recent_group_images:
+            now = time.time()
+            valid_recent = [img for img in recent_group_images[group_id] if now - img["time"] < 180]
+            vision_triggers = ["何切", "看图", "手牌", "牌局", "怎么打", "打哪", "识别", "这把", "这手", "这局", "牌"]
+            has_reply = "[CQ:reply" in raw_text or "reply" in str(data.get("message", ""))
+            is_trigger = any(w in user_msg for w in vision_triggers)
+            if (has_reply or is_trigger) and valid_recent:
+                latest_img = valid_recent[-1]["path"]
+                if os.path.exists(latest_img):
+                    image_paths.append(latest_img)
+                    print(f"📸 智能关联群内最近 {int(now - valid_recent[-1]['time'])}s 内发送的截图进行多模态分析！")
+
+        # 清理消息中的 CQ 码（CQ:image, CQ:reply 等），保留纯提问
+        clean_text = re.sub(r"\[CQ:image,[^\]]+\]", "", user_msg)
+        clean_text = re.sub(r"\[CQ:reply,[^\]]+\]", "", clean_text).strip()
+        if not clean_text and image_paths:
+            clean_text = "哈基米，帮我看下这张麻将牌局/手牌截图，我应该怎么打？打哪张最好？请给出专业硬核的何切建议！"
+        elif not clean_text:
+            return
+
+        # 🛡️ 1. 频率与刷屏防护 (Rate Limiting)
+        allowed, cd_reason = security_guard.check_rate_limit(sender_id, group_id)
+        if not allowed:
+            if cd_reason:
+                payload = {
+                    "action": "send_msg",
+                    "params": {
+                        "message_type": msg_type,
+                        "message": cd_reason,
+                        ("group_id" if msg_type == "group" else "user_id"): (
+                            int(group_id) if msg_type == "group" else int(sender_id)
+                        ),
+                    },
+                }
+                await websocket.send(json.dumps(payload))
+            return
+
+        # 🛡️ 2. 前置安全检测与注入过滤
+        is_safe, sanitized_text, reject_reason = security_guard.sanitize_and_inspect(clean_text)
+        if not is_safe:
+            print(f"🛡️ [拦截恶意输入] 来自【{sender_name}】({sender_id}): {reject_reason}")
+            payload = {
+                "action": "send_msg",
+                "params": {
+                    "message_type": msg_type,
+                    "message": sanitized_text,
+                    ("group_id" if msg_type == "group" else "user_id"): (
+                        int(group_id) if msg_type == "group" else int(sender_id)
+                    ),
+                },
+            }
+            await websocket.send(json.dumps(payload))
+            return
+
+        user_msg = sanitized_text
+        prompt_text = (
+            f"【群友 {sender_name}】: {user_msg}"
+            if msg_type == "group"
+            else user_msg
+        )
+
+        print(f"📩 [{session_id}] 收到来自【{sender_name}】的消息: {user_msg} (附图: {len(image_paths)})")
+
+        # 优先处理内置快捷指令
+        cmd_reply = handle_commands(session_id, user_msg)
+        if cmd_reply:
+            reply_payload = {
+                "action": "send_msg",
+                "params": {
+                    "message_type": msg_type,
+                    "message": cmd_reply,
+                    ("group_id" if msg_type == "group" else "user_id"): (
+                        int(group_id) if msg_type == "group" else int(sender_id)
+                    ),
+                },
+            }
+            await websocket.send(json.dumps(reply_payload))
+            return
+
+        # 调用大模型生成哈基米回复（支持多模态识图分析）
+        bot_reply = await chat_with_llm(
+            session_id=session_id,
+            prompt_text=prompt_text,
+            raw_user_msg=user_msg,
+            image_paths=image_paths,
+        )
+        print(f"🐱 [{session_id}] 哈基米回复: {bot_reply}")
+
+        # 构造 NapCat 发送消息负载 (CQ:face 会被 NapCat 自动解析为原生 QQ 大表情)
+        reply_payload = {
+            "action": "send_msg",
+            "params": {
+                "message_type": msg_type,
+                "message": bot_reply,
+                ("group_id" if msg_type == "group" else "user_id"): (
+                    int(group_id) if msg_type == "group" else int(sender_id)
+                ),
+            },
+        }
+        await websocket.send(json.dumps(reply_payload))
+
+        # 清理临时下载的图片文件
+        for p in image_paths:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"❌ 处理消息异常: {e}")
+
+
 async def ws_handler(websocket):
     print("🟢 [NapCatQQ 已建立连接] 开始监听消息...")
     async for message in websocket:
@@ -300,165 +470,10 @@ async def ws_handler(websocket):
             data = json.loads(message)
             if data.get("post_type") != "message":
                 continue
-
-            msg_type = data.get("message_type")  # "private" 或 "group"
-            raw_text = data.get("raw_message", "").strip()
-            sender_info = data.get("sender", {})
-            sender_id = str(data.get("user_id"))
-            group_id = str(data.get("group_id", ""))
-
-            # 🖼️ 全局嗅探群内图片并更新近期缓存（只要有人发图就暂存 3 分钟，方便后续何切/看图提问）
-            found_urls = extract_image_urls(data)
-            if found_urls and group_id:
-                for u in found_urls[:2]:
-                    local_img = await download_image(u)
-                    if local_img:
-                        if group_id not in recent_group_images:
-                            recent_group_images[group_id] = []
-                        recent_group_images[group_id].append({"time": time.time(), "path": local_img})
-                        recent_group_images[group_id] = recent_group_images[group_id][-5:]
-
-            # 提取发送者昵称（群名片优先）
-            sender_name = sender_info.get("card") or sender_info.get("nickname") or f"用户_{sender_id}"
-
-            should_reply = False
-            user_msg = raw_text
-
-            if msg_type == "private":
-                session_id = f"private_{sender_id}"
-                should_reply = True
-            elif msg_type == "group":
-                self_id = str(data.get("self_id"))
-                at_me = f"[CQ:at,qq={self_id}]"
-                if at_me in raw_text:
-                    should_reply = True
-                    user_msg = raw_text.replace(at_me, "").strip()
-                session_id = f"group_{group_id}"
-
-            if not should_reply:
-                continue
-
-            # 🖼️ 提取多模态图片附件
-            image_paths = []
-            if found_urls:
-                print(f"📸 检测到当前提问消息附带 {len(found_urls)} 张图片，正在处理...")
-                for u in found_urls[:2]:
-                    local_img = await download_image(u)
-                    if local_img and local_img not in image_paths:
-                        image_paths.append(local_img)
-
-            # 🧠 智能图片回溯：如果当前消息没带图，但群友说了“何切/怎么打/识别”或回复了带图消息，自动绑定群内最近截图
-            if not image_paths and group_id in recent_group_images:
-                now = time.time()
-                valid_recent = [img for img in recent_group_images[group_id] if now - img["time"] < 180]
-                vision_triggers = ["何切", "看图", "手牌", "牌局", "怎么打", "打哪", "识别", "这把", "这手", "这局", "牌"]
-                has_reply = "[CQ:reply" in raw_text or "reply" in str(data.get("message", ""))
-                is_trigger = any(w in user_msg for w in vision_triggers)
-                if (has_reply or is_trigger) and valid_recent:
-                    latest_img = valid_recent[-1]["path"]
-                    if os.path.exists(latest_img):
-                        image_paths.append(latest_img)
-                        print(f"📸 智能关联群内最近 {int(now - valid_recent[-1]['time'])}s 内发送的截图进行多模态分析！")
-
-            # 清理消息中的 CQ 码（CQ:image, CQ:reply 等），保留纯提问
-            clean_text = re.sub(r"\[CQ:image,[^\]]+\]", "", user_msg)
-            clean_text = re.sub(r"\[CQ:reply,[^\]]+\]", "", clean_text).strip()
-            if not clean_text and image_paths:
-                clean_text = "哈基米，帮我看下这张麻将牌局/手牌截图，我应该怎么打？打哪张最好？请给出专业硬核的何切建议！"
-            elif not clean_text:
-                continue
-
-            # 🛡️ 1. 频率与刷屏防护 (Rate Limiting)
-            allowed, cd_reason = security_guard.check_rate_limit(sender_id, group_id)
-            if not allowed:
-                if cd_reason:
-                    payload = {
-                        "action": "send_msg",
-                        "params": {
-                            "message_type": msg_type,
-                            "message": cd_reason,
-                            ("group_id" if msg_type == "group" else "user_id"): (
-                                int(group_id) if msg_type == "group" else int(sender_id)
-                            ),
-                        },
-                    }
-                    await websocket.send(json.dumps(payload))
-                continue
-
-            # 🛡️ 2. 前置安全检测与注入过滤
-            is_safe, sanitized_text, reject_reason = security_guard.sanitize_and_inspect(clean_text)
-            if not is_safe:
-                print(f"🛡️ [拦截恶意输入] 来自【{sender_name}】({sender_id}): {reject_reason}")
-                payload = {
-                    "action": "send_msg",
-                    "params": {
-                        "message_type": msg_type,
-                        "message": sanitized_text,
-                        ("group_id" if msg_type == "group" else "user_id"): (
-                            int(group_id) if msg_type == "group" else int(sender_id)
-                        ),
-                    },
-                }
-                await websocket.send(json.dumps(payload))
-                continue
-
-            user_msg = sanitized_text
-            prompt_text = (
-                f"【群友 {sender_name}】: {user_msg}"
-                if msg_type == "group"
-                else user_msg
-            )
-
-            print(f"📩 [{session_id}] 收到来自【{sender_name}】的消息: {user_msg} (附图: {len(image_paths)})")
-
-            # 优先处理内置快捷指令
-            cmd_reply = handle_commands(session_id, user_msg)
-            if cmd_reply:
-                reply_payload = {
-                    "action": "send_msg",
-                    "params": {
-                        "message_type": msg_type,
-                        "message": cmd_reply,
-                        ("group_id" if msg_type == "group" else "user_id"): (
-                            int(group_id) if msg_type == "group" else int(sender_id)
-                        ),
-                    },
-                }
-                await websocket.send(json.dumps(reply_payload))
-                continue
-
-            # 调用大模型生成哈基米回复（支持多模态识图分析）
-            bot_reply = await chat_with_llm(
-                session_id=session_id,
-                prompt_text=prompt_text,
-                raw_user_msg=user_msg,
-                image_paths=image_paths,
-            )
-            print(f"🐱 [{session_id}] 哈基米回复: {bot_reply}")
-
-            # 构造 NapCat 发送消息负载 (CQ:face 会被 NapCat 自动解析为原生 QQ 大表情)
-            reply_payload = {
-                "action": "send_msg",
-                "params": {
-                    "message_type": msg_type,
-                    "message": bot_reply,
-                    ("group_id" if msg_type == "group" else "user_id"): (
-                        int(group_id) if msg_type == "group" else int(sender_id)
-                    ),
-                },
-            }
-            await websocket.send(json.dumps(reply_payload))
-
-            # 清理临时下载的图片文件
-            for p in image_paths:
-                try:
-                    if os.path.exists(p):
-                        os.remove(p)
-                except Exception:
-                    pass
-
+            # 异步并发执行，避免单个耗时查询（如联网检索）阻塞整个接收主循环
+            asyncio.create_task(handle_single_message(websocket, data))
         except Exception as e:
-            print(f"❌ 处理消息异常: {e}")
+            print(f"❌ 接收消息异常: {e}")
 
 
 async def main():
