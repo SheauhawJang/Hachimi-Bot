@@ -93,6 +93,14 @@ DEFAULT_WEB_SEARCH = os.environ.get("ENABLE_WEB_SEARCH", "0") in ("1", "true", "
 # thinking compute via generationConfig.thinkingConfig.thinkingLevel.
 # 精确匹配 Google 官方最新的真实模型映射
 MODEL_MAP = {
+    # Gemini 4 Argon 系列（下一代旗舰推理大模型）
+    "gemini-4-argon": ("gemini-4-argon", None),
+    "gemini-4-argon-low": ("gemini-4-argon-low", None),
+    "gemini-4-argon-medium": ("gemini-4-argon-medium", None),
+    "gemini-4-argon-high": ("gemini-4-argon-high", None),
+    "argon": ("gemini-4-argon", None),
+    "4-argon": ("gemini-4-argon", None),
+
     # 用户控制台对应的 Gemini 3 系列真实模型
     "gemini-3.8-flash": ("gemini-3.8-flash-tiered", None),
     "gemini-3.6-flash": ("gemini-3-flash", None),
@@ -1015,9 +1023,21 @@ def _make_upstream_request(url: str, envelope: dict, streaming: bool = False):
     return req
 
 
+def _resolve_url(envelope: dict, streaming: bool = False) -> str:
+    """Argon models are hosted on cloudcode-pa.googleapis.com rather than daily."""
+    model = envelope.get("model", "")
+    if "argon" in model:
+        base = "https://cloudcode-pa.googleapis.com"
+    else:
+        base = CLOUDCODE_BASE
+    endpoint = "streamGenerateContent?alt=sse" if streaming else "generateContent"
+    return f"{base}/v1internal:{endpoint}"
+
+
 def call_generate_content(envelope: dict) -> dict:
     """Non-streaming call. Returns the unwrapped inner Gemini response dict."""
-    req = _make_upstream_request(GENERATE_CONTENT_URL, envelope, streaming=False)
+    url = _resolve_url(envelope, streaming=False)
+    req = _make_upstream_request(url, envelope, streaming=False)
     try:
         with urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
             raw = resp.read().decode()
@@ -1050,7 +1070,8 @@ def stream_generate_content(envelope: dict):
       - Or a bare JSON array of incremental response objects (some endpoints).
     We handle both.
     """
-    req = _make_upstream_request(STREAM_GENERATE_CONTENT_URL, envelope, streaming=True)
+    url = _resolve_url(envelope, streaming=True)
+    req = _make_upstream_request(url, envelope, streaming=True)
     try:
         resp = urlopen(req, timeout=UPSTREAM_TIMEOUT)
     except HTTPError as e:

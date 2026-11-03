@@ -201,7 +201,11 @@ async def chat_with_llm(
     except Exception as e:
         err_msg = str(e)
         print(f"❌ [模型调用错误]: {err_msg}")
-        return f"【对话出错】：{err_msg}"
+        cur_m = config.get("gemini_model", "")
+        hint = ""
+        if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "404" in err_msg:
+            hint = f"\n💡 [提示] 当前模型「{cur_m}」配额暂未开放或达到上限，可通过发送 `/model gemini-3.8-flash` 手动切回推荐模型喵~"
+        return f"【对话出错】：{err_msg}{hint}"
 
 
 def handle_commands(session_id: str, text: str) -> str | None:
@@ -252,20 +256,49 @@ def handle_commands(session_id: str, text: str) -> str | None:
     if cmd.startswith("/model"):
         parts = cmd.split()
         supported_models = {
-            "gemini-3.8-flash": "Gemini 3.8 Flash（高阶联网推理，查比赛查资讯最准，推荐）",
+            "gemini-3.8-flash": "Gemini 3.8 Flash（默认推荐，联网搜索与资讯最准）",
+            "gemini-4-argon": "Gemini 4 Argon（谷歌下一代旗舰推理大模型，可通过 /model argon 切换）",
+            "claude-opus": "Claude Opus 5.5 High（顶尖复杂推理与长文本思维链）",
+            "claude-sonnet": "Claude Sonnet 5.5 Medium（极佳代码逻辑与分析能力）",
             "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite（超低延迟、极度省额度）",
             "gemini-3-flash": "Gemini 3 Flash（标准 Flash）",
             "gemini-2.5-pro": "Gemini 2.5 Pro（深度思维链推理）",
         }
-        if len(parts) > 1 and parts[1] in supported_models:
-            config["gemini_model"] = parts[1]
-            return f"🤖 模型已成功切换为：【{parts[1]}】！\n说明：{supported_models[parts[1]]}"
+        model_aliases = {
+            "argon": "gemini-4-argon",
+            "4-argon": "gemini-4-argon",
+            "4argon": "gemini-4-argon",
+            "gemini4": "gemini-4-argon",
+            "opus": "claude-opus",
+            "sonnet": "claude-sonnet",
+            "flash": "gemini-3.8-flash",
+            "lite": "gemini-3.5-flash-lite",
+            "pro": "gemini-2.5-pro",
+        }
+        if len(parts) > 1:
+            raw_target = parts[1].lower()
+            target = model_aliases.get(raw_target, raw_target)
+            if target in supported_models:
+                config["gemini_model"] = target
+                # 持久化到 config.json
+                try:
+                    with open("config.json", "w", encoding="utf-8") as f:
+                        json.dump(config, f, indent=4, ensure_ascii=False)
+                except Exception:
+                    pass
+                return (
+                    f"🤖 模型已成功手动切换为：【{target}】！\n"
+                    f"说明：{supported_models[target]}\n"
+                    f"💡 随时可发送 `/model flash` 或 `/model gemini-3.8-flash` 切回默认推荐模型喵~"
+                )
+            else:
+                return f"⚠️ 未识别的模型名称「{parts[1]}」。发送 `/model` 可查看当前支持的模型列表喵~"
         else:
             cur_model = config.get("gemini_model", "gemini-3.8-flash")
-            lines = [f"当前模型：【{cur_model}】", "可用模型列表："]
+            lines = [f"当前运行模型：【{cur_model}】", "可用模型及手动切换指令："]
             for m_id, m_desc in supported_models.items():
-                lines.append(f"  • `{m_id}` : {m_desc}")
-            lines.append("\n切换指令示例：/model gemini-3.8-flash")
+                lines.append(f"  • `/model {m_id}`\n    └ {m_desc}")
+            lines.append("\n💡 提示：输入 `/model <模型名>`（支持简写如 `/model argon`、`/model flash`）即可手动切换，完全不会自动更改。")
             return "\n".join(lines)
 
     return None
