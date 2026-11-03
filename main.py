@@ -129,16 +129,22 @@ async def chat_with_llm(
             if new_conv_id:
                 session_mgr.set_conv_id(session_id, new_conv_id)
         else:
-            messages = [
-                {"role": "system", "content": current_system_prompt},
-                {"role": "user", "content": prompt_text},
-            ]
+            # 走反代理 API (OpenAI 兼容模式) - 自动维系该群独立上下文记忆
+            history = session_mgr.get_history(session_id)
+            messages = [{"role": "system", "content": current_system_prompt}]
+            messages.extend(history)
+            messages.append({"role": "user", "content": prompt_text})
+
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
                 temperature=0.8,
             )
             raw_reply = response.choices[0].message.content.strip()
+
+            # 记录本轮对话到该群独立历史中 (受滑动窗口严格限制，不乱烧 token)
+            session_mgr.add_message(session_id, "user", prompt_text)
+            session_mgr.add_message(session_id, "assistant", raw_reply)
 
         # 经过表情与思维链清洗管道处理为最终 QQ 发送格式
         final_reply = format_bot_reply(raw_reply)
