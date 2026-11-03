@@ -135,11 +135,15 @@ async def chat_with_llm(
             messages.extend(history)
             messages.append({"role": "user", "content": prompt_text})
 
-            response = await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.8,
-            )
+            req_params = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.8,
+            }
+            if config.get("enable_web_search", False):
+                req_params["extra_body"] = {"web_search": True}
+
+            response = await client.chat.completions.create(**req_params)
             raw_reply = response.choices[0].message.content.strip()
 
             # 直接追加对话，无任何人工滑动窗口截断

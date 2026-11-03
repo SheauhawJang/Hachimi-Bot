@@ -82,6 +82,7 @@ DEFAULT_SYSTEM_INSTRUCTION = "You are a helpful AI assistant."
 
 UPSTREAM_TIMEOUT = 300  # 5 minutes
 TOKEN_REFRESH_SKEW = 120  # refresh this many seconds before actual expiry
+DEFAULT_WEB_SEARCH = os.environ.get("ENABLE_WEB_SEARCH", "0") in ("1", "true", "True")
 
 # Model mapping: OpenAI-facing name -> Antigravity backend model name.
 # Tested against cloudcode-pa.googleapis.com on 2026-06-30.
@@ -671,6 +672,13 @@ def _build_gemini_request(body: dict, backend_model: str, thinking_level: str = 
 
     # Tools.
     tools = _openai_tools_to_gemini(body.get("tools"))
+    enable_search = (
+        body.get("web_search")
+        or body.get("google_search")
+        or DEFAULT_WEB_SEARCH
+    )
+    if enable_search:
+        tools.append({"googleSearch": {}})
     if tools:
         inner["tools"] = tools
 
@@ -1732,7 +1740,12 @@ def main():
     )
     parser.add_argument("--port", type=int, default=8877, help="Port to listen on (default 8877)")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default 127.0.0.1)")
+    parser.add_argument("--web-search", action="store_true", help="Enable Google Search Grounding by default")
     args = parser.parse_args()
+
+    global DEFAULT_WEB_SEARCH
+    if args.web_search:
+        DEFAULT_WEB_SEARCH = True
 
     if not _preflight_check():
         sys.exit(1)
