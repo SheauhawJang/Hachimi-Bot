@@ -96,6 +96,7 @@ MODEL_MAP = {
     "gemini-3.6-flash": ("gemini-3-flash", None),
     "gemini-3.5-flash-lite": ("gemini-3.5-flash-lite", None),
     "gemini-3-flash": ("gemini-3-flash", None),
+    "gemini-2.5-pro": ("gemini-2.5-pro", None),
     
     # Antigravity 官方三档别名 (对应 tieredModelIds)
     "flash": ("gemini-3.8-flash-tiered", None),

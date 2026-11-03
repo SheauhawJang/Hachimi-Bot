@@ -173,8 +173,8 @@ def handle_commands(session_id: str, text: str) -> str | None:
             f"---------------------------\n"
             f"💬 @我 发送文字或麻将截图即可对话/分析何切\n"
             f"🔄 /reset ：清空本群当前的上下文记忆，开启新话题\n"
-            f"🎭 /persona ：查看所有可用人设\n"
-            f"🎭 /persona [名称] ：切换人设（如 /persona hajimi）\n"
+            f"🎭 /persona ：查看或切换人设（如 /persona hajimi）\n"
+            f"🤖 /model ：查看或切换模型（如 /model gemini-3.8-flash）\n"
             f"---------------------------"
         )
 
@@ -202,6 +202,25 @@ def handle_commands(session_id: str, text: str) -> str | None:
             for k, v in personas_data["personas"].items():
                 lines.append(f"  • `{k}` : {v['name']}")
             lines.append("\n切换指令示例：/persona hajimi")
+            return "\n".join(lines)
+
+    if cmd.startswith("/model"):
+        parts = cmd.split()
+        supported_models = {
+            "gemini-3.8-flash": "Gemini 3.8 Flash（高阶联网推理，查比赛查资讯最准，推荐）",
+            "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite（超低延迟、极度省额度）",
+            "gemini-3-flash": "Gemini 3 Flash（标准 Flash）",
+            "gemini-2.5-pro": "Gemini 2.5 Pro（深度思维链推理）",
+        }
+        if len(parts) > 1 and parts[1] in supported_models:
+            config["gemini_model"] = parts[1]
+            return f"🤖 模型已成功切换为：【{parts[1]}】！\n说明：{supported_models[parts[1]]}"
+        else:
+            cur_model = config.get("gemini_model", "gemini-3.8-flash")
+            lines = [f"当前模型：【{cur_model}】", "可用模型列表："]
+            for m_id, m_desc in supported_models.items():
+                lines.append(f"  • `{m_id}` : {m_desc}")
+            lines.append("\n切换指令示例：/model gemini-3.8-flash")
             return "\n".join(lines)
 
     return None
