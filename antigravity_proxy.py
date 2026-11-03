@@ -27,6 +27,7 @@ Then configure Hermes:
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -35,6 +36,7 @@ import threading
 import time
 import traceback
 import uuid
+import httpx
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -422,6 +424,63 @@ def _content_to_text(content) -> str:
     return str(content)
 
 
+def _content_to_gemini_parts(content) -> list[dict]:
+    """Convert OpenAI message content to a list of Gemini parts.
+    Supports plain text and multimodal blocks (image_url with data: or http(s) URL).
+    """
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"text": content}] if content else []
+    parts = []
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                parts.append({"text": str(block)})
+                continue
+            btype = block.get("type", "text")
+            if btype in ("text", "input_text"):
+                t = block.get("text", "")
+                if t:
+                    parts.append({"text": t})
+            elif btype in ("image_url", "input_image"):
+                iu = block.get("image_url") or {}
+                url = iu.get("url", "") if isinstance(iu, dict) else str(iu)
+                if url.startswith("data:"):
+                    try:
+                        header, b64_data = url.split(",", 1)
+                        mime_type = "image/jpeg"
+                        if ":" in header and ";" in header:
+                            mime_type = header.split(":")[1].split(";")[0]
+                        parts.append({
+                            "inlineData": {
+                                "mimeType": mime_type,
+                                "data": b64_data.strip(),
+                            }
+                        })
+                    except Exception as e:
+                        _log(f"Failed to parse data URL: {e}")
+                elif url.startswith("http://") or url.startswith("https://"):
+                    try:
+                        r = httpx.get(url, timeout=12.0)
+                        if r.status_code == 200:
+                            mime = r.headers.get("content-type", "image/jpeg").split(";")[0]
+                            b64_data = base64.b64encode(r.content).decode("utf-8")
+                            parts.append({
+                                "inlineData": {
+                                    "mimeType": mime,
+                                    "data": b64_data,
+                                }
+                            })
+                    except Exception as e:
+                        _log(f"Failed to download image_url {url}: {e}")
+            else:
+                t = str(block.get("text", ""))
+                if t:
+                    parts.append({"text": t})
+    return parts
+
+
 def _openai_tools_to_gemini(tools: list) -> list:
     """Convert OpenAI tools array to Gemini functionDeclarations format.
 
@@ -637,11 +696,8 @@ def _build_gemini_request(body: dict, backend_model: str, thinking_level: str = 
                 system_texts.append(text)
             continue
 
-        # Default: user role.
-        text = _content_to_text(msg.get("content"))
-        parts = []
-        if text:
-            parts.append({"text": text})
+        # Default: user role (supports multimodal text + images).
+        parts = _content_to_gemini_parts(msg.get("content"))
         # Some clients send tool_calls on user messages; handle gracefully.
         for tc in (msg.get("tool_calls") or []):
             if not isinstance(tc, dict):

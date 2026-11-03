@@ -99,6 +99,18 @@ async def download_image(url: str) -> str | None:
     return None
 
 
+def image_to_data_url(image_path: str) -> str:
+    """将本地图片文件编码为 OpenAI/Gemini 兼容的 Base64 Data URL"""
+    import base64
+    import mimetypes
+    mime, _ = mimetypes.guess_type(image_path)
+    if not mime:
+        mime = "image/jpeg"
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
+
+
 async def chat_with_llm(
     session_id: str,
     prompt_text: str,
@@ -129,11 +141,23 @@ async def chat_with_llm(
             if new_conv_id:
                 session_mgr.set_conv_id(session_id, new_conv_id)
         else:
-            # 走反代理 API (OpenAI 兼容模式) - 直接追加消息堆入，由 Gemini 原生处理上下文与缓存压缩
+            # 走反代理 API (OpenAI 兼容模式) - 多模态识图与全量上下文直推
             history = session_mgr.get_history(session_id)
             messages = [{"role": "system", "content": current_system_prompt}]
             messages.extend(history)
-            messages.append({"role": "user", "content": prompt_text})
+
+            # 构造多模态用户输入 (文本 + 图片)
+            if image_paths:
+                content_blocks = [{"type": "text", "text": prompt_text}]
+                for p in image_paths:
+                    if os.path.exists(p):
+                        content_blocks.append({
+                            "type": "image_url",
+                            "image_url": {"url": image_to_data_url(p)}
+                        })
+                messages.append({"role": "user", "content": content_blocks})
+            else:
+                messages.append({"role": "user", "content": prompt_text})
 
             req_params = {
                 "model": model,
@@ -146,8 +170,9 @@ async def chat_with_llm(
             response = await client.chat.completions.create(**req_params)
             raw_reply = response.choices[0].message.content.strip()
 
-            # 直接追加对话，无任何人工滑动窗口截断
-            session_mgr.add_message(session_id, "user", prompt_text)
+            # 记录本轮对话到历史（历史中仅记录文本标记，避免膨胀 sessions 存储体积）
+            hist_text = prompt_text + (" [发送了图片附件]" if image_paths else "")
+            session_mgr.add_message(session_id, "user", hist_text)
             session_mgr.add_message(session_id, "assistant", raw_reply)
 
         # 经过表情与思维链清洗管道处理为最终 QQ 发送格式
@@ -226,6 +251,35 @@ def handle_commands(session_id: str, text: str) -> str | None:
     return None
 
 
+# 群内最近图片缓存字典 (group_id -> [{"time": timestamp, "path": local_img}])
+recent_group_images: dict[str, list[dict]] = {}
+
+
+def extract_image_urls(data: dict) -> list[str]:
+    """从 OneBot 消息（数组格式与 CQ 码字符串格式）中全面提取图片 URL"""
+    urls = []
+    # 1. 处理 array 消息段格式
+    msg = data.get("message")
+    if isinstance(msg, list):
+        for seg in msg:
+            if isinstance(seg, dict) and seg.get("type") == "image":
+                d = seg.get("data", {})
+                u = d.get("url") or d.get("file")
+                if u and isinstance(u, str) and u.startswith("http"):
+                    urls.append(u)
+    # 2. 正则解析 CQ:image 码
+    for text_field in [data.get("raw_message", ""), str(data.get("message", ""))]:
+        if not text_field:
+            continue
+        for u in re.findall(r"\[CQ:image,[^\]]*?url=([^,\]]+)", text_field):
+            if u.startswith("http") and u not in urls:
+                urls.append(u)
+        for u in re.findall(r"\[CQ:image,[^\]]*?file=(http[^,\]]+)", text_field):
+            if u not in urls:
+                urls.append(u)
+    return urls
+
+
 async def ws_handler(websocket):
     print("🟢 [NapCatQQ 已建立连接] 开始监听消息...")
     async for message in websocket:
@@ -239,6 +293,17 @@ async def ws_handler(websocket):
             sender_info = data.get("sender", {})
             sender_id = str(data.get("user_id"))
             group_id = str(data.get("group_id", ""))
+
+            # 🖼️ 全局嗅探群内图片并更新近期缓存（只要有人发图就暂存 3 分钟，方便后续何切/看图提问）
+            found_urls = extract_image_urls(data)
+            if found_urls and group_id:
+                for u in found_urls[:2]:
+                    local_img = await download_image(u)
+                    if local_img:
+                        if group_id not in recent_group_images:
+                            recent_group_images[group_id] = []
+                        recent_group_images[group_id].append({"time": time.time(), "path": local_img})
+                        recent_group_images[group_id] = recent_group_images[group_id][-5:]
 
             # 提取发送者昵称（群名片优先）
             sender_name = sender_info.get("card") or sender_info.get("nickname") or f"用户_{sender_id}"
@@ -257,23 +322,38 @@ async def ws_handler(websocket):
                     user_msg = raw_text.replace(at_me, "").strip()
                 session_id = f"group_{group_id}"
 
-            if not should_reply or not user_msg:
+            if not should_reply:
                 continue
 
-            # 🖼️ 提取并下载群消息中的图片附件（麻将手牌截图、雀魂战局等）
+            # 🖼️ 提取多模态图片附件
             image_paths = []
-            img_urls = re.findall(r"\[CQ:image,[^\]]*url=([^,\]]+)[^\]]*\]", user_msg)
-            if img_urls:
-                print(f"📸 检测到群友发送了 {len(img_urls)} 张图片，正在下载...")
-                for u in img_urls[:2]:  # 一次最多处理 2 张图片
+            if found_urls:
+                print(f"📸 检测到当前提问消息附带 {len(found_urls)} 张图片，正在处理...")
+                for u in found_urls[:2]:
                     local_img = await download_image(u)
-                    if local_img:
+                    if local_img and local_img not in image_paths:
                         image_paths.append(local_img)
 
-            # 清理消息中的 CQ 码，保留纯文本提问
-            clean_text = re.sub(r"\[CQ:image,[^\]]+\]", "", user_msg).strip()
+            # 🧠 智能图片回溯：如果当前消息没带图，但群友说了“何切/怎么打/识别”或回复了带图消息，自动绑定群内最近截图
+            if not image_paths and group_id in recent_group_images:
+                now = time.time()
+                valid_recent = [img for img in recent_group_images[group_id] if now - img["time"] < 180]
+                vision_triggers = ["何切", "看图", "手牌", "牌局", "怎么打", "打哪", "识别", "这把", "这手", "这局", "牌"]
+                has_reply = "[CQ:reply" in raw_text or "reply" in str(data.get("message", ""))
+                is_trigger = any(w in user_msg for w in vision_triggers)
+                if (has_reply or is_trigger) and valid_recent:
+                    latest_img = valid_recent[-1]["path"]
+                    if os.path.exists(latest_img):
+                        image_paths.append(latest_img)
+                        print(f"📸 智能关联群内最近 {int(now - valid_recent[-1]['time'])}s 内发送的截图进行多模态分析！")
+
+            # 清理消息中的 CQ 码（CQ:image, CQ:reply 等），保留纯提问
+            clean_text = re.sub(r"\[CQ:image,[^\]]+\]", "", user_msg)
+            clean_text = re.sub(r"\[CQ:reply,[^\]]+\]", "", clean_text).strip()
             if not clean_text and image_paths:
-                clean_text = "哈基米，帮我看下这把麻将牌局/手牌，我应该怎么打？打哪张最好？"
+                clean_text = "哈基米，帮我看下这张麻将牌局/手牌截图，我应该怎么打？打哪张最好？请给出专业硬核的何切建议！"
+            elif not clean_text:
+                continue
 
             # 🛡️ 1. 频率与刷屏防护 (Rate Limiting)
             allowed, cd_reason = security_guard.check_rate_limit(sender_id, group_id)
