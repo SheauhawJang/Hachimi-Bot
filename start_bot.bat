@@ -1,8 +1,5 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
-echo ============================================================
-echo 正在启动 QQ 哈基米 & 麻将机器人后端...
-echo ============================================================
+echo Starting QQ Bot Backend (Port 8080)...
 python main.py
 pause
