@@ -322,7 +322,8 @@ def handle_commands(session_id: str, text: str, sender_id: str = "") -> str | No
 
         # 2. 权限审查：只有管理员白名单才允许变更模型
         admin_users = [str(u) for u in config.get("admin_users", [])]
-        is_admin = (not sender_id) or (sender_id in admin_users)
+        owner_id = str(config.get("owner_id", ""))
+        is_admin = (not sender_id) or (sender_id in admin_users) or (sender_id == owner_id)
         if not is_admin:
             return "喵？只有主人/管理员才可以调整本猫的大模型核心喵！爪子拍开你的手.jpg 🐾😼"
 
