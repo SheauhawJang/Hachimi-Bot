@@ -299,6 +299,8 @@ def handle_commands(session_id: str, text: str, sender_id: str = "") -> str | No
         supported_models = {
             "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite（系统默认主力，超低延迟、极度省额度）",
             "gemini-3.8-flash": "Gemini 3.8 Flash（高阶联网推理，查比赛查资讯最准，推荐）",
+            "gemini-3.8-flash-high": "Gemini 3.8 Flash 深度思考（高阶 Thinking 展开，逻辑推导极强）",
+            "gemini-3.8-flash-medium": "Gemini 3.8 Flash 标准思考（中度 Thinking 思考链）",
             "claude-opus": "Claude Opus 5.5 High（顶尖复杂推理与长文本思维链，实测可用）",
             "claude-sonnet": "Claude Sonnet 5.5 Medium（极佳代码逻辑与分析能力，实测可用）",
             "gpt-oss-120b": "GPT-OSS 120B Medium（开源大模型专项）",
@@ -311,6 +313,11 @@ def handle_commands(session_id: str, text: str, sender_id: str = "") -> str | No
             "lite": "gemini-3.5-flash-lite",
             "3.5": "gemini-3.5-flash-lite",
             "3.8": "gemini-3.8-flash",
+            "think": "gemini-3.8-flash-high",
+            "thinking": "gemini-3.8-flash-high",
+            "3.8-high": "gemini-3.8-flash-high",
+            "3.8-think": "gemini-3.8-flash-high",
+            "3.8-medium": "gemini-3.8-flash-medium",
             "oss": "gpt-oss-120b",
         }
         default_m = config.get("default_model", "gemini-3.5-flash-lite")
