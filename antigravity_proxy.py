@@ -93,27 +93,20 @@ DEFAULT_WEB_SEARCH = os.environ.get("ENABLE_WEB_SEARCH", "0") in ("1", "true", "
 # thinking compute via generationConfig.thinkingConfig.thinkingLevel.
 # 精确匹配 Google 官方最新的真实模型映射
 MODEL_MAP = {
-    # Gemini 4 Argon 系列（下一代旗舰推理大模型）
-    "gemini-4-argon": ("gemini-4-argon", None),
-    "gemini-4-argon-low": ("gemini-4-argon-low", None),
-    "gemini-4-argon-medium": ("gemini-4-argon-medium", None),
-    "gemini-4-argon-high": ("gemini-4-argon-high", None),
-    "argon": ("gemini-4-argon", None),
-    "4-argon": ("gemini-4-argon", None),
-
-    # 用户控制台对应的 Gemini 3 系列真实模型
+    # ── Gemini 3 系列主力（推荐，日常 5 小时滚动高配额池）──
     "gemini-3.8-flash": ("gemini-3.8-flash-tiered", None),
-    "gemini-3.6-flash": ("gemini-3-flash", None),
     "gemini-3.5-flash-lite": ("gemini-3.5-flash-lite", None),
+    "gemini-3.1-flash-lite": ("gemini-3.1-flash-lite", None),
     "gemini-3-flash": ("gemini-3-flash", None),
-    "gemini-2.5-pro": ("gemini-2.5-pro", None),
+    "gemini-3.6-flash": ("gemini-3-flash", None),
     
-    # Antigravity 官方三档别名 (对应 tieredModelIds)
+    # 快捷档位别名 (对应 tieredModelIds)
     "flash": ("gemini-3.8-flash-tiered", None),
     "flash_lite": ("gemini-3.5-flash-lite", None),
+    "lite": ("gemini-3.5-flash-lite", None),
     "pro": ("gemini-3.8-flash-tiered", "high"),
 
-    # 带思考档位的别名（通过 thinkingConfig.thinkingLevel 注入；未实测后端是否全部接受）
+    # 思考档位别名
     "gemini-3.8-flash-minimal": ("gemini-3.8-flash-tiered", "minimal"),
     "gemini-3.8-flash-low": ("gemini-3.8-flash-tiered", "low"),
     "gemini-3.8-flash-medium": ("gemini-3.8-flash-tiered", "medium"),
@@ -122,13 +115,22 @@ MODEL_MAP = {
     "gemini-3-flash-low": ("gemini-3-flash", "low"),
     "gemini-3-flash-medium": ("gemini-3-flash", "medium"),
     "gemini-3-flash-high": ("gemini-3-flash", "high"),
-    "pro-low": ("gemini-3.8-flash-tiered", "low"),
-    "pro-medium": ("gemini-3.8-flash-tiered", "medium"),
-    
-    # Claude 真实模型
+
+    # ── Claude 5.5 系列（实测可用，长文本/代码逻辑极强）──
     "claude-sonnet": ("claude-sonnet-5-5-medium", None),
+    "claude-sonnet-medium": ("claude-sonnet-5-5-medium", None),
+    "claude-sonnet-high": ("claude-sonnet-5-5-high", None),
     "claude-opus": ("claude-opus-5-5-high", None),
+    "claude-opus-medium": ("claude-opus-5-5-medium", None),
+    "claude-opus-high": ("claude-opus-5-5-high", None),
     "claude": ("claude-sonnet-5-5-medium", None),
+
+    # ── 开源与专项模型 ──
+    "gpt-oss-120b": ("gpt-oss-120b-medium", None),
+    "gpt-oss": ("gpt-oss-120b-medium", None),
+
+    # ── Gemini 2.5 系列（注意：服务器端容量受限，易 503）──
+    "gemini-2.5-pro": ("gemini-2.5-pro", None),
 }
 
 DEFAULT_MODEL = "gemini-3.8-flash"
@@ -1060,12 +1062,8 @@ def _make_upstream_request(url: str, envelope: dict, streaming: bool = False):
 
 
 def _resolve_url(envelope: dict, streaming: bool = False) -> str:
-    """Argon models are hosted on cloudcode-pa.googleapis.com rather than daily."""
-    model = envelope.get("model", "")
-    if "argon" in model:
-        base = "https://cloudcode-pa.googleapis.com"
-    else:
-        base = CLOUDCODE_BASE
+    """Resolve upstream endpoint URL."""
+    base = CLOUDCODE_BASE
     endpoint = "streamGenerateContent?alt=sse" if streaming else "generateContent"
     return f"{base}/v1internal:{endpoint}"
 

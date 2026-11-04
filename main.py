@@ -27,9 +27,10 @@ try:
     from websockets.asyncio.server import serve
 except ImportError:
     from websockets.server import serve
+from websockets.exceptions import ConnectionClosed
 
 from openai import AsyncOpenAI
-from face_converter import format_bot_reply
+from face_converter import format_bot_reply, THINK_PATTERN
 from antigravity_bridge import send_to_antigravity
 from session_manager import SessionManager
 from security_guard import SecurityGuard
@@ -152,6 +153,7 @@ async def chat_with_llm(
     prompt_text: str,
     raw_user_msg: str,
     image_paths: list[str] | None = None,
+    platform: str = "qq",
 ) -> str:
     global current_system_prompt
     # 会话独立模型：优先使用该会话设定的模型，未设定则使用 default_model (默认 3.5 flash lite)
@@ -181,7 +183,12 @@ async def chat_with_llm(
         else:
             # 走反代理 API (OpenAI 兼容模式) - 多模态识图与全量上下文直推
             history = session_mgr.get_history(session_id)
-            messages = [{"role": "system", "content": current_system_prompt + QQ_SAFETY_CONTRACT}]
+            sys_content = (
+                current_system_prompt + QQ_SAFETY_CONTRACT
+                if platform == "qq"
+                else current_system_prompt
+            )
+            messages = [{"role": "system", "content": sys_content}]
             messages.extend(history)
 
             # 构造多模态用户输入 (文本 + 图片)
@@ -220,12 +227,15 @@ async def chat_with_llm(
             session_mgr.add_message(session_id, "user", hist_text)
             session_mgr.add_message(session_id, "assistant", raw_reply)
 
-        # 经过表情与思维链清洗管道处理为最终 QQ 发送格式
-        formatted_reply = format_bot_reply(raw_reply)
-
-        # 🛡️ 经过输出敏感词后置熔断审查（若含高危封号词直接拦截替换，绝不发往 QQ）
-        is_safe, final_reply, reject_reason = security_guard.inspect_output(formatted_reply, session_id=session_id)
-        return final_reply
+        if platform == "qq":
+            # 经过表情与思维链清洗管道处理为最终 QQ 发送格式
+            formatted_reply = format_bot_reply(raw_reply)
+            # 🛡️ 经过输出敏感词后置熔断审查（若含高危封号词直接拦截替换，绝不发往 QQ）
+            is_safe, final_reply, reject_reason = security_guard.inspect_output(formatted_reply, session_id=session_id)
+            return final_reply
+        else:
+            # Telegram 等支持原生 Markdown 的平台：仅清洗思维链标签，保留原生排版与 Emoji
+            return THINK_PATTERN.sub("", raw_reply).strip()
     except Exception as e:
         err_msg = str(e)
         print(f"❌ [模型调用错误]: {err_msg}")
@@ -240,13 +250,13 @@ def handle_commands(session_id: str, text: str, sender_id: str = "") -> str | No
     global current_persona_key, current_system_prompt
     cmd = text.strip()
 
-    if cmd in ["/help", "帮助", "菜单"]:
+    if cmd in ["/start", "/help", "帮助", "菜单"]:
         cur_name = personas_data["personas"].get(current_persona_key, {}).get("name", current_persona_key)
         mode_desc = "Gemini Web (多模态识图 / 自动Cookie刷新)" if backend == "gemini_web" else "Antigravity Pro 沙箱"
         default_m = config.get("default_model", "gemini-3.5-flash-lite")
         cur_session_m = session_models.get(session_id, default_m)
         return (
-            f"🐾 【QQ 哈基米 & 麻将多模态助手】\n"
+            f"🐾 【哈基米 & 麻将多模态助手】\n"
             f"当前人设：{cur_name}\n"
             f"当前模型：{cur_session_m}（会话独立）\n"
             f"驱动核心：{mode_desc}\n"
@@ -288,23 +298,20 @@ def handle_commands(session_id: str, text: str, sender_id: str = "") -> str | No
         parts = cmd.split()
         supported_models = {
             "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite（系统默认主力，超低延迟、极度省额度）",
-            "gemini-3.8-flash": "Gemini 3.8 Flash（高阶联网推理，查比赛查资讯最准）",
-            "gemini-4-argon": "Gemini 4 Argon（谷歌下一代旗舰推理大模型，可通过 /model argon 切换）",
-            "claude-opus": "Claude Opus 5.5 High（顶尖复杂推理与长文本思维链）",
-            "claude-sonnet": "Claude Sonnet 5.5 Medium（极佳代码逻辑与分析能力）",
+            "gemini-3.8-flash": "Gemini 3.8 Flash（高阶联网推理，查比赛查资讯最准，推荐）",
+            "claude-opus": "Claude Opus 5.5 High（顶尖复杂推理与长文本思维链，实测可用）",
+            "claude-sonnet": "Claude Sonnet 5.5 Medium（极佳代码逻辑与分析能力，实测可用）",
+            "gpt-oss-120b": "GPT-OSS 120B Medium（开源大模型专项）",
             "gemini-3-flash": "Gemini 3 Flash（标准 Flash）",
-            "gemini-2.5-pro": "Gemini 2.5 Pro（深度思维链推理）",
         }
         model_aliases = {
-            "argon": "gemini-4-argon",
-            "4-argon": "gemini-4-argon",
-            "4argon": "gemini-4-argon",
-            "gemini4": "gemini-4-argon",
             "opus": "claude-opus",
             "sonnet": "claude-sonnet",
             "flash": "gemini-3.8-flash",
             "lite": "gemini-3.5-flash-lite",
-            "pro": "gemini-2.5-pro",
+            "3.5": "gemini-3.5-flash-lite",
+            "3.8": "gemini-3.8-flash",
+            "oss": "gpt-oss-120b",
         }
         default_m = config.get("default_model", "gemini-3.5-flash-lite")
         cur_session_m = session_models.get(session_id, default_m)
@@ -322,7 +329,7 @@ def handle_commands(session_id: str, text: str, sender_id: str = "") -> str | No
             return "\n".join(lines)
 
         # 2. 权限审查：只有管理员白名单才允许变更模型
-        admin_users = [str(u) for u in config.get("admin_users", [])]
+        admin_users = [str(u) for u in config.get("admin_users", []) + config.get("telegram_admin_users", [])]
         owner_id = str(config.get("owner_id", ""))
         is_admin = (not sender_id) or (sender_id in admin_users) or (sender_id == owner_id)
         if not is_admin:
@@ -538,7 +545,8 @@ async def handle_single_message(websocket, data: dict):
                 ),
             },
         }
-        await websocket.send(json.dumps(reply_payload))
+        target_ws = active_ws if active_ws is not None else websocket
+        await target_ws.send(json.dumps(reply_payload))
 
         # 清理临时下载的图片文件
         for p in image_paths:
@@ -552,25 +560,39 @@ async def handle_single_message(websocket, data: dict):
         print(f"❌ 处理消息异常: {e}")
 
 
+active_ws = None
+
+
 async def ws_handler(websocket):
+    global active_ws
+    active_ws = websocket
     print("🟢 [NapCatQQ 已建立连接] 开始监听消息...")
-    async for message in websocket:
-        try:
-            data = json.loads(message)
-            if data.get("post_type") != "message":
-                continue
-            # 异步并发执行，避免单个耗时查询（如联网检索）阻塞整个接收主循环
-            asyncio.create_task(handle_single_message(websocket, data))
-        except Exception as e:
-            print(f"❌ 接收消息异常: {e}")
+    try:
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                if data.get("post_type") != "message":
+                    continue
+                # 异步并发执行，避免单个耗时查询（如联网检索）阻塞整个接收主循环
+                asyncio.create_task(handle_single_message(websocket, data))
+            except Exception as e:
+                print(f"❌ 接收消息异常: {e}")
+    except (ConnectionClosed, ConnectionResetError, OSError) as e:
+        print(f"🟡 [NapCatQQ 连接已断开] ({e})，等待客户端自动重连...")
+    finally:
+        if active_ws is websocket:
+            active_ws = None
+
+
+from tg_bot import start_telegram_service
 
 
 async def main():
     host = "0.0.0.0"
     port = config.get("bot_ws_port", 8080)
     print("=" * 60)
-    print("🚀 QQ 哈基米 & 麻将多模态助手 (QQ-Mahjong-Bot) 正在启动...")
-    print(f"📡 监听 WebSocket 端口: ws://{host}:{port}/ws")
+    print("🚀 哈基米 & 麻将多模态助手 (QQ + Telegram 双端引擎) 正在启动...")
+    print(f"📡 QQ 监听 WebSocket 端口: ws://{host}:{port}/ws")
     print(f"🎭 默认激活人设: 【{current_persona_key}】")
     if backend == "gemini_web":
         print("🌐 运行后端: Gemini Web 网页版 (支持多模态麻将截图何切 / 后台自动心跳刷新Cookie)")
@@ -585,8 +607,14 @@ async def main():
         print("🛡️ 运行后端: Antigravity Pro 本地沙箱隔离通道")
     print("=" * 60)
 
-    server = await serve(ws_handler, host, port)
-    await server.wait_closed()
+    # 并发启动 Telegram 轮询服务 (若已配置 telegram_bot_token)
+    tg_task = asyncio.create_task(start_telegram_service(sys.modules[__name__]))
+
+    server = await serve(ws_handler, host, port, ping_interval=20, ping_timeout=60)
+    try:
+        await server.wait_closed()
+    finally:
+        tg_task.cancel()
 
 
 if __name__ == "__main__":
