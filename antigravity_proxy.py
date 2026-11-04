@@ -106,8 +106,7 @@ MODEL_MAP = {
     "lite": ("gemini-3.5-flash-lite", None),
     "pro": ("gemini-3.8-flash-tiered", "high"),
 
-    # 思考档位别名
-    "gemini-3.8-flash-minimal": ("gemini-3.8-flash-tiered", "minimal"),
+    # 思考档位别名（3.8-flash 官方后端支持 low/medium/high，不支持 minimal）
     "gemini-3.8-flash-low": ("gemini-3.8-flash-tiered", "low"),
     "gemini-3.8-flash-medium": ("gemini-3.8-flash-tiered", "medium"),
     "gemini-3.8-flash-high": ("gemini-3.8-flash-tiered", "high"),
