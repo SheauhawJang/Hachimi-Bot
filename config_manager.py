@@ -16,7 +16,6 @@ from openai import AsyncOpenAI
 
 from session_manager import SessionManager
 from security_guard import SecurityGuard
-from gemini_web_bridge import GeminiWebBridge
 from mahjong_vision import MahjongVision
 
 
@@ -86,6 +85,7 @@ def load_personas() -> dict:
 
 
 personas_data = load_personas()
+personas = personas_data.get("personas", {})
 current_persona_key = config.get("default_persona", "hajimi")
 current_system_prompt = personas_data["personas"].get(
     current_persona_key, {}
@@ -144,11 +144,15 @@ mahjong_vision = MahjongVision()
 # 初始化 Gemini Web 逆向客户端 (支持多模态识图与自动刷新)
 web_bridge = None
 if backend == "gemini_web":
-    web_bridge = GeminiWebBridge(
-        secure_1psid=config.get("secure_1psid", ""),
-        secure_1psidts=config.get("secure_1psidts", ""),
-        proxy=config.get("proxy_url"),
-    )
+    try:
+        from gemini_web_bridge import GeminiWebBridge
+        web_bridge = GeminiWebBridge(
+            secure_1psid=config.get("secure_1psid", ""),
+            secure_1psidts=config.get("secure_1psidts", ""),
+            proxy=config.get("proxy_url"),
+        )
+    except Exception as e:
+        print(f"[Warning] Failed to initialize GeminiWebBridge: {e}")
 
 # 备用 OpenAI 客户端
 raw_proxy = config.get("proxy_url")

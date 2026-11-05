@@ -34,11 +34,9 @@ async def main():
     print(f"\n🙋 测试提问: {test_prompt}\n")
 
     raw_reply = await chat_with_llm(
-        user_id="test_user",
-        user_msg=test_prompt,
-        user_name="测试员",
-        group_id="test_group",
-        persona_key=persona_key,
+        session_id="test_session",
+        prompt_text=test_prompt,
+        raw_user_msg=test_prompt,
     )
 
     formatted_reply = format_bot_reply(raw_reply)
