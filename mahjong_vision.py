@@ -80,8 +80,14 @@ class MahjongVision:
     def _get_ocr(self):
         if self.ocr is None:
             try:
-                from rapidocr_onnxruntime import RapidOCR
+                from rapidocr import RapidOCR
                 self.ocr = RapidOCR()
+            except ImportError:
+                try:
+                    from rapidocr_onnxruntime import RapidOCR
+                    self.ocr = RapidOCR()
+                except Exception as e:
+                    print(f"[MahjongVision] OCR 初始化失败: {e}")
             except Exception as e:
                 print(f"[MahjongVision] OCR 初始化失败: {e}")
         return self.ocr
