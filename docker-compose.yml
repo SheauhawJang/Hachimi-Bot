@@ -6,9 +6,9 @@ services:
     network_mode: "host"
     environment:
       - ACCOUNT=2681496244
-      - WS_ENABLE=true
-      - NAPCAT_GID=0
-      - NAPCAT_UID=0
+      - WEBUI_TOKEN=123456
+      - MODE=reverse_ws
+      - ONEBOT_URL=ws://127.0.0.1:8080/ws
     volumes:
       - ./napcat_data/config:/app/napcat/config
-      - ./napcat_data/qq:/root/.config/QQ
+      - ./napcat_data/qq:/app/.config/QQ
