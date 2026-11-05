@@ -3,12 +3,15 @@ services:
     image: mlikiowa/napcat-docker:latest
     container_name: napcat
     restart: always
-    network_mode: "host"
+    ports:
+      - "6099:6099"
     environment:
-      - ACCOUNT=2681496244
       - WEBUI_TOKEN=123456
       - MODE=reverse_ws
-      - ONEBOT_URL=ws://127.0.0.1:8080/ws
+      - ONEBOT_URL=ws://host.docker.internal:8080/ws
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./napcat_data/config:/app/napcat/config
       - ./napcat_data/qq:/app/.config/QQ
+
