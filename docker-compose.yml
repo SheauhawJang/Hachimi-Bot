@@ -6,6 +6,7 @@ services:
     ports:
       - "6099:6099"
     environment:
+      - ACCOUNT=2681496244
       - WEBUI_TOKEN=123456
       - MODE=reverse_ws
       - ONEBOT_URL=ws://host.docker.internal:8080/ws
@@ -14,4 +15,5 @@ services:
     volumes:
       - ./napcat_data/config:/app/napcat/config
       - ./napcat_data/qq:/app/.config/QQ
+
 
