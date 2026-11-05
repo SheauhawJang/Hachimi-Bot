@@ -1,83 +1,85 @@
-# QQ Gemini (哈基米) & 麻将智能助手
+# QQ Gemini (哈基米) & 日麻视觉 AI 助手
 
-基于 NapCatQQ (OneBot 11) 与 Google Gemini Pro 的 QQ 智能对话机器人。默认预置超可爱的**“哈基米（全能萌猫）”**人设，并预留麻将牌效与视觉识别扩展接口。
-
----
-
-## 📁 目录结构
-
-```
-qq-mahjong-bot/
-├── config.json         # 本地实际配置文件 (包含 API Key，已被 .gitignore 保护)
-├── config.example.json # 配置文件模板
-├── personas.json       # 人设列表与提示词（默认：哈基米，支持动态热切换）
-├── main.py             # 机器人主服务（OneBot 11 反向 WebSocket + 会话管理）
-├── test_gemini.py      # 独立连通性测试脚本（无需启动 NapCatQQ 即可验证 Gemini 与人设）
-├── requirements.txt    # Python 依赖项
-├── .gitignore          # Git 忽略配置
-└── README.md           # 说明文档
-```
+基于 **NapCat (Linux Docker / OneBot 11)** + **Google Gemini Pro / Antigravity Bridge** + **高精度开源日麻视觉检测（mahjong-detector + ViT + RapidOCR）** 的全能 QQ 机器人。
 
 ---
 
-## 🚀 快速启动指南
+## 📁 核心架构
 
-### 1. 填写配置 (`config.json`)
-打开 [`config.json`](./config.json)，填入你的 Gemini API Key：
-```json
-{
-  "gemini_api_key": "在这里填入你的 Google AI Studio API Key",
-  "gemini_model": "gemini-1.5-pro",
-  "proxy_url": "http://127.0.0.1:7890",
-  "bot_ws_port": 8080,
-  "max_history_turns": 10,
-  "default_persona": "hajimi"
-}
-```
-* **注意**：如果在国内网络，请确保 `proxy_url` 端口与你的代理客户端（如 Clash 默认为 `7890`，v2rayN 为 `10809`）一致；若直连可设为 `null`。
+- **感知层**：开源专用日麻检测模型（`mahjong-detector`）+ ViT 牌面复核 + RapidOCR 罗盘/点数识别，直接输出标准客观盘面报告。
+- **协议层**：支持标准 **MJAI** 协议导出，直连 **Mortal (凡夫)** 日麻引擎进行最优何切与 Q-value 评估。
+- **对话人设层**：哈基米多模态萌宠对话，支持动态切换人设与记忆管理。
+- **运行环境**：推荐在 **Linux VM (虚拟机) 或 Docker** 中运行，避免 Windows TP 驱动针对桌面客户端的反作弊风控。
 
 ---
 
-### 2. 独立验证 Gemini 与人设效果（推荐）
-在不需要打开 NapCatQQ 的情况下，先跑一个单次测试：
+## 🚀 Linux 虚拟机 / 服务器一键部署流程
+
+### 第一步：克隆仓库 (需支持 Git LFS)
+在 Linux 虚拟机中运行：
 ```bash
-python test_gemini.py
+# 确保安装了 git 和 git-lfs
+sudo apt update && sudo apt install -y git git-lfs
+git lfs install
+
+# 克隆仓库
+git clone <你的_GITHUB_仓库地址> qq-mahjong-bot
+cd qq-mahjong-bot
+git lfs pull
 ```
-若提示测试成功且收到哈基米的小猫咪回复，说明 API Key 与网络完全通畅！
 
 ---
 
-### 3. 配置 NapCatQQ (QQ 协议端)
-在 NapCatQQ 的网络配置（WebUI 或 `napcat/config/onebot11.json`）中设置：
-* **通信方式**：反向 WebSocket（`ws_reverse`）
-* **连接地址**：`ws://127.0.0.1:8080/ws`
-* **状态**：启用
-
----
-
-### 4. 运行机器人服务
+### 第二步：一键初始化 Python 环境
+执行随仓库附带的初始化脚本：
 ```bash
-python main.py
+chmod +x setup_linux.sh start_bot.sh
+./setup_linux.sh
 ```
-控制台提示 `🟢 [NapCatQQ 已建立连接]` 后，即可在 QQ 中私聊或在群里 @机器人 开始对话！
+该脚本会自动：
+1. 检查并创建 Python 3 虚拟环境 `.venv`；
+2. 安装 `requirements.txt` 中的依赖（包括 `opencv-python-headless`, `onnxruntime`, `rapidocr-onnxruntime` 等）；
+3. 生成 `config.json` 模板。
 
 ---
 
-## 🎭 可用人设与指令
+### 第三步：配置 Clash 代理与 API 密钥 (`config.json`)
 
-* `/help`：查看指令菜单
-* `/reset` 或 `重置记忆`：清空当前上下文历史
-* `/persona`：查看所有可用人设列表
-* `/persona [名称]`：切换人设，支持：
-  * `hajimi`：**哈基米（全能萌猫）**（默认，软萌机灵、带生动猫咪动作与口癖）
-  * `hajimi_tsundere`：**哈基米（傲娇猫主子）**（口嫌体正直的高贵布偶猫）
-  * `mahjong_coach`：**麻将教练（毒舌专业）**（南彦）
-  * `sichuan_spicy`：**川麻老手（地道豪爽）**（地道茶馆血战到底）
-  * `friendly_assistant`：**温柔管家**
+由于虚拟机内需要通过宿主机 Windows 的 Clash 科学上网（请求 Gemini API / Antigravity）：
+
+1. **宿主机 Windows Clash 设置**：
+   - 打开 Clash，将 **Allow LAN（允许局域网连接）** 开关打开；
+   - 查看你宿主机 Windows 的局域网 IP（在 Windows 命令提示符运行 `ipconfig`，例如 `192.168.x.x`）。
+2. **编辑虚拟机的 `config.json`**：
+   ```json
+   {
+     "gemini_api_key": "YOUR_GEMINI_API_KEY",
+     "proxy_url": "http://192.168.x.x:7890",
+     "bot_ws_port": 8080,
+     "default_persona": "hajimi"
+   }
+   ```
+   > 注：若虚拟机内已开启全局系统代理（`export http_proxy=...`），可直接将 `proxy_url` 留空 `""`，程序会自动继承系统的环境变量代理。
 
 ---
 
-## 🔜 后续拓展计划
-- [ ] 接入本地 `Codes/mahjong` 目录的 JS 牌效模块（计算向听数与何切）
-- [ ] 接入 Gemini 视觉手牌识别（照片/截图直读手牌）
-- [ ] 接入 Mortal 牌谱检讨 Web API
+### 第四步：启动 NapCat (Linux Docker)
+
+本项目提供了开箱即用的 `docker-compose.yml`，使用 Linux Host 网络无缝直通宿主机 8080 端口：
+
+```bash
+docker compose up -d
+```
+
+- **扫码登录**：在浏览器直接打开 `http://<虚拟机IP>:6099/webui`；
+- 使用手机 QQ 扫描网页上的二维码授权登录（在 Linux 下会识别为安全、无驱动注入的官方 Linux 终端，永不触发外挂踢线）。
+
+---
+
+### 第五步：启动机器人主进程
+
+```bash
+./start_bot.sh
+```
+
+控制台提示 `🟢 [NapCat 客户端已连接并建立会话]` 后，机器人即成功上线！可以在 QQ 群或私聊发送麻将牌局截图或与哈基米聊天。

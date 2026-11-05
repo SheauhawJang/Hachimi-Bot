@@ -82,7 +82,7 @@ SAFE_REFUSAL_REPLIES = [
 
 
 class SecurityGuard:
-    def __init__(self, user_cooldown: float = 3.0, group_cooldown: float = 1.2, max_len: int = 150):
+    def __init__(self, user_cooldown: float = 3.0, group_cooldown: float = 1.2, max_len: int | None = None):
         self.user_cooldown = user_cooldown
         self.group_cooldown = group_cooldown
         self.max_len = max_len
@@ -116,8 +116,8 @@ class SecurityGuard:
         """
         cleaned = text.strip()
 
-        # 1. 长度截断，防止海量文本爆破
-        if len(cleaned) > self.max_len:
+        # 1. 长度截断（若未设置 max_len 或为 None，则不截断，保留完整长文本）
+        if self.max_len and len(cleaned) > self.max_len:
             cleaned = cleaned[:self.max_len]
 
         # 2. 注入指令拦截

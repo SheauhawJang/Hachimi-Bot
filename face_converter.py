@@ -86,7 +86,54 @@ def convert_faces_to_cq(text: str, max_replace: int = 5) -> str:
     return FACE_PATTERN.sub(replace_match, text)
 
 
-def format_bot_reply(text: str) -> str:
-    """格式化哈基米的最终发送文本"""
+def convert_mentions_to_cq(
+    text: str,
+    mention_map: dict[str, str] | None = None,
+    self_names: list[str] | None = None,
+) -> str:
+    """
+    将模型文本输出中的 @群友昵称、@群名片 或 @纯数字QQ 转换为 OneBot 11 标准 [CQ:at,qq=XXX]
+    1. 自动转换 @12345678 为 [CQ:at,qq=12345678] 
+    2. 依据传入的 mention_map 字典按名称长度降序优先替换最长名称
+    3. 严密避开邮箱地址（如 abc@qq.com）与机器人自身昵称
+    4. 保持原有已存在的 [CQ:at,qq=XXX] 完好
+    """
+    if not text:
+        return text
+
+    # 1. 转换纯数字 QQ 号（5-12位数字）
+    # 避开邮箱前缀 (abc@) 和变量名，纯数字后不能紧随数字
+    text = re.sub(r"(?<![a-zA-Z0-9_.])@(\d{5,12})(?![0-9])", r"[CQ:at,qq=\1] ", text)
+
+    if not mention_map:
+        return text
+
+    ignored_names = set(self_names or ["哈基米", "机器人", "bot", "Bot", "BOT"])
+
+    # 2. 按群友名称长度降序排列，避免“张三”截断“张三丰”
+    sorted_names = sorted(mention_map.keys(), key=lambda x: len(x), reverse=True)
+
+    for name in sorted_names:
+        clean_name = str(name).strip()
+        if not clean_name or clean_name in ignored_names or len(clean_name) < 2:
+            continue
+        qq = str(mention_map[name]).strip()
+        if not qq:
+            continue
+
+        # 匹配 @name，前面不得是英数字及邮箱连接符
+        pattern = re.compile(rf"(?<![a-zA-Z0-9_.])@{re.escape(clean_name)}", re.IGNORECASE)
+        text = pattern.sub(f"[CQ:at,qq={qq}] ", text)
+
+    return text
+
+
+def format_bot_reply(
+    text: str,
+    mention_map: dict[str, str] | None = None,
+    self_names: list[str] | None = None,
+) -> str:
+    """格式化哈基米的最终发送文本（表情转换、Markdown 清洗、@提及转 CQ 码）"""
     cleaned = clean_response_text(text)
-    return convert_faces_to_cq(cleaned)
+    with_faces = convert_faces_to_cq(cleaned)
+    return convert_mentions_to_cq(with_faces, mention_map=mention_map, self_names=self_names)

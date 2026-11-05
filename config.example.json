@@ -1,10 +1,18 @@
 {
-  "backend": "antigravity",
-  "gemini_model": "flash",
+  "backend": "api",
+  "gemini_model": "gemini-3.5-flash-lite",
+  "default_model": "gemini-3.5-flash-lite",
+  "default_persona": "hajimi",
+  "gemini_api_key": "YOUR_GEMINI_API_KEY",
+  "base_url": "http://127.0.0.1:8877/v1",
+  "proxy_url": "http://127.0.0.1:7890",
   "bot_ws_port": 8080,
   "max_history_turns": 10,
-  "default_persona": "hajimi",
-  "proxy_url": "http://127.0.0.1:7890",
-  "gemini_api_key": "YOUR_GEMINI_API_KEY",
-  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"
+  "enable_web_search": true,
+  "quote_reply": false,
+  "owner_id": "",
+  "admin_users": [],
+  "telegram_bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+  "telegram_api_base_url": "https://api.telegram.org",
+  "telegram_admin_users": []
 }

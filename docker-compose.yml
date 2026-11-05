@@ -1,0 +1,14 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: always
+    network_mode: "host"
+    environment:
+      - ACCOUNT=2681496244
+      - WS_ENABLE=true
+      - NAPCAT_GID=0
+      - NAPCAT_UID=0
+    volumes:
+      - ./napcat_data/config:/app/napcat/config
+      - ./napcat_data/qq:/root/.config/QQ
